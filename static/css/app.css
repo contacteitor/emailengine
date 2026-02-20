@@ -106,8 +106,15 @@ textarea.form-control::-ms-input-placeholder {
     color: #888888;
 }
 
-.bg-gradient-primary {
+/*.bg-gradient-primary {
     background-color: #407ec9;
+    background-image: none;
+    background-size: cover;
+}*/
+
+.bg-gradient-primary {
+    /*background-color: #407ec9;*/
+     background-color:#0067EE;
     /*#407ec9;*/
     background-image: none;
     background-size: cover;

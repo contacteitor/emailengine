@@ -6,7 +6,7 @@
     <meta charset="utf-8">
     <meta http-equiv="X-UA-Compatible" content="IE=edge">
     <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
-    <meta name="description" content="EmailEngine Application page; The Ultimate Email API for Developers" />
+    <meta name="description" content="Clientify - The Ultimate CRM for Small Businesses" />
     <meta name="author" content="Postal Systems OÜ">
 
     <title>{{#if pageTitleFull}}{{pageTitleFull}}{{else}}{{pageBrandName}}{{#if pageTitle}} &ndash;
@@ -34,11 +34,30 @@
     {{/if}}
 
 </head>
-
 <body class="bg-gradient-primary">
 
     <div class="container">
+        {{#if httpRedirectUrl}}
+        <div class="custom_redirect" style="margin: 0;
+      height: 100vh;
+      display: flex;
+      justify-content: center;
+      align-items: center;">
+                {{> alerts}}
 
+                        <div class="p-redirect">
+
+                            {{#if embeddedTemplateHeader}}
+                            <div>
+                                {{{embeddedTemplateHeader}}}
+                            </div>
+                            {{/if}}
+
+
+                            {{{content}}}
+                        </div>
+        </div>
+        {{else}}
         <!-- Outer Row -->
         <div class="row justify-content-center">
 
@@ -68,7 +87,7 @@
             </div>
 
         </div>
-
+        {{/if}}
     </div>
 
     <!-- Bootstrap core JavaScript-->
