@@ -8,7 +8,8 @@ const packageData = require('../package.json');
 const config = require('wild-config');
 const logger = require('../lib/logger');
 const Path = require('path');
-const { loadTranslations, gt, joiLocales } = require('../lib/translations');
+const Gettext = require('@postalsys/gettext');
+const { loadTranslations, gt, joiLocales, locales } = require('../lib/translations');
 const util = require('util');
 const { webhooks: Webhooks } = require('../lib/webhooks');
 const featureFlags = require('../lib/feature-flags');
@@ -74,6 +75,7 @@ const Joi = require('joi');
 const hapiPino = require('hapi-pino');
 const Inert = require('@hapi/inert');
 const Vision = require('@hapi/vision');
+const Accept = require('@hapi/accept');
 const HapiSwagger = require('hapi-swagger');
 
 const pathlib = require('path');
@@ -121,8 +123,7 @@ const {
     DEFAULT_EENGINE_TIMEOUT,
     DEFAULT_MAX_ATTACHMENT_SIZE,
     MAX_FORM_TTL,
-    NONCE_BYTES,
-    OUTLOOK_EXPIRATION_TIME
+    NONCE_BYTES
 } = consts;
 
 const { fetch: fetchCmd } = require('undici');
@@ -185,6 +186,8 @@ const AccountTypeSchema = Joi.string()
     .example('outlook')
     .description('Account type')
     .required();
+
+const SUPPORTED_LOCALES = locales.map(locale => locale.locale);
 
 const FLAG_SORT_ORDER = ['\\Inbox', '\\Flagged', '\\Sent', '\\Drafts', '\\All', '\\Archive', '\\Junk', '\\Trash'];
 
@@ -293,6 +296,13 @@ class ResponseStream extends Transform {
         registeredPublishers.add(this);
         this.periodicKeepAliveTimer = false;
         this.updateTimer();
+
+        this._finalized = false;
+
+        // Ensure cleanup on all stream end scenarios
+        this.once('error', () => this.finalize());
+        this.once('close', () => this.finalize());
+        this.once('end', () => this.finalize());
     }
 
     updateTimer() {
@@ -321,6 +331,9 @@ class ResponseStream extends Transform {
     }
 
     finalize() {
+        if (this._finalized) return; // Prevent double cleanup
+        this._finalized = true;
+
         clearTimeout(this.periodicKeepAliveTimer);
         registeredPublishers.delete(this);
     }
@@ -447,6 +460,7 @@ parentPort.on('message', message => {
         let { resolve, reject, timer } = callQueue.get(message.mid);
         clearTimeout(timer);
         callQueue.delete(message.mid);
+
         if (message.error) {
             let err = new Error(message.error);
             if (message.code) {
@@ -458,6 +472,7 @@ parentPort.on('message', message => {
             if (message.info) {
                 err.info = message.info;
             }
+
             return reject(err);
         } else {
             return resolve(message.response);
@@ -496,7 +511,12 @@ const init = async () => {
 
     handlebars.registerHelper('_', (...args) => {
         let params = args.slice(1, args.length - 1);
-        let translated = gt.gettext(args[0]);
+
+        let locale = params.shift();
+
+        let localGt = locale ? gt.useLocale(locale) : gt;
+
+        let translated = localGt.gettext(args[0]);
         if (params.length) {
             translated = util.format(translated, ...params);
         }
@@ -504,20 +524,22 @@ const init = async () => {
         return new handlebars.SafeString(translated);
     });
 
+    handlebars.registerHelper('isodate', time => new Date(Number(time)).toISOString());
+
     handlebars.registerHelper('ngettext', (msgid, plural, count) => util.format(gt.ngettext(msgid, plural, count), count));
 
     handlebars.registerHelper('featureFlag', function (flag, options) {
         if (featureFlags.enabled(flag)) {
-            return options.fn(this); // eslint-disable-line no-invalid-this
+            return options.fn(this);
         }
-        return options.inverse(this); // eslint-disable-line no-invalid-this
+        return options.inverse(this);
     });
 
     handlebars.registerHelper('equals', function (compareVal, baseVal, options) {
         if (baseVal === compareVal) {
-            return options.fn(this); // eslint-disable-line no-invalid-this
+            return options.fn(this);
         }
-        return options.inverse(this); // eslint-disable-line no-invalid-this
+        return options.inverse(this);
     });
 
     handlebars.registerHelper('inc', (nr, inc) => Number(nr) + Number(inc));
@@ -574,7 +596,10 @@ const init = async () => {
             validate: {
                 options: {
                     messages: joiLocales,
-                    convert: true
+                    convert: true,
+                    errors: {
+                        language: 'en' // Default language
+                    }
                 },
                 headers: Joi.object({
                     'x-ee-timeout': headerTimeoutSchema
@@ -681,22 +706,97 @@ const init = async () => {
         return certificateData;
     });
 
-    server.ext('onPostAuth', async (request, h) => {
-        let defaultLocale = (await settings.get('locale')) || 'en';
+    server.ext('onPreAuth', async (request, h) => {
+        const tags = (request.route && request.route.settings && request.route.settings.tags) || [];
+        // Skip if it's a static file route
+        if (tags.includes('static')) {
+            return h.continue;
+        }
+
+        const defaultLocale = (await settings.get('locale')) || 'en';
         if (defaultLocale && gt.locale !== defaultLocale) {
             gt.setLocale(defaultLocale);
         }
 
-        if (joiLocales[defaultLocale] && request.route.settings.validate.options) {
-            if (!request.route.settings.validate.options.errors) {
-                request.route.settings.validate.options.errors = {};
-            }
-            request.route.settings.validate.options.errors.language = defaultLocale;
+        let detectedLocale = defaultLocale;
+        let updateLocaleCookie;
+        // Priority order:
+        // 1. Query parameter (?locale=nl)
+        if (request.query.locale && SUPPORTED_LOCALES.includes(request.query.locale)) {
+            detectedLocale = request.query.locale;
+            updateLocaleCookie = detectedLocale;
         }
+        // 2. Custom header (X-EE-Locale: nl)
+        else if (request.headers['x-ee-locale'] && SUPPORTED_LOCALES.includes(request.headers['x-ee-locale'])) {
+            detectedLocale = request.headers['x-ee-locale'];
+            updateLocaleCookie = detectedLocale;
+        }
+        // 3. Use the locale store in cookie
+        else if (request.state && request.state.locale && request.state.locale.locale) {
+            detectedLocale = request.state && request.state.locale && request.state.locale.locale;
+        }
+        // 4. Accept-Language header negotiation
+        else if (request.headers['accept-language']) {
+            try {
+                detectedLocale = Accept.language(request.headers['accept-language'], SUPPORTED_LOCALES);
+            } catch (err) {
+                // Keep default locale on parse error
+                request.logger.debug({
+                    msg: 'Accept-Language parse error',
+                    err,
+                    header: request.headers['accept-language']
+                });
+            }
+        }
+        // 5. If still no match, keep the default
+
+        // Save selected locale in a cookie for UI requests
+        // Only use the value from query argument or custom header, not from Accept-Language header
+
+        if (
+            updateLocaleCookie &&
+            (!request.state || !request.state.locale || updateLocaleCookie !== request.state.locale.locale) &&
+            // skip API paths
+            !request.route.path.startsWith('/v1/') &&
+            !request.route.path.startsWith('/health')
+        ) {
+            // set locale cookie
+            h.state('locale', { locale: detectedLocale });
+        }
+
+        // Set the locale for the request
+        const reqLocale = detectedLocale && Gettext.getLanguageCode(detectedLocale);
+        if (reqLocale && gt.catalogs.hasOwnProperty(reqLocale)) {
+            request.app.gt = gt.useLocale(reqLocale);
+            request.app.locale = reqLocale;
+        } else {
+            request.app.locale = defaultLocale;
+            request.app.gt = gt;
+        }
+
+        // Make sure validation errors use selected locale
+        if (request.route.settings.validate && request.route.settings.validate.options) {
+            // Get user's locale
+            const locale = request.app.locale || 'en';
+
+            // Create new validation options for this request
+            const validationOptions = Object.assign({}, request.route.settings.validate.options, {
+                errors: {
+                    language: locale
+                }
+            });
+
+            // Apply to this request only
+            request.route.settings.validate.options = validationOptions;
+        }
+
         return h.continue;
     });
 
     server.ext('onRequest', async (request, h) => {
+        // set default, will be overriden once active language is resolved
+        request.app.gt = gt;
+
         // check if client IP is resolved from X-Forwarded-For or not
         let enableApiProxy = (await settings.get('enableApiProxy')) || false;
         if (enableApiProxy) {
@@ -724,7 +824,7 @@ const init = async () => {
         request.flash = async message => await flash(redis, request, message);
 
         if (ADMIN_ACCESS_ADDRESSES && ADMIN_ACCESS_ADDRESSES.length) {
-            if (/^\/admin\b/i.test(request.path) && !matchIp(request.app.ip, ADMIN_ACCESS_ADDRESSES)) {
+            if (request.path.startsWith('/admin') && !matchIp(request.app.ip, ADMIN_ACCESS_ADDRESSES)) {
                 logger.info({
                     msg: 'Blocked access from unlisted IP address',
                     remoteAddress: request.app.ip,
@@ -758,7 +858,10 @@ const init = async () => {
 
     const swaggerOptions = {
         swaggerUI: true,
+        jsonPath: '/swagger.json',
         swaggerUIPath: '/admin/swagger/resources/',
+
+        OAS: 'v3.0',
 
         expanded: 'list',
         sortEndpoints: 'method',
@@ -770,23 +873,53 @@ const init = async () => {
 
         grouping: 'tags',
 
-        //auth: 'api-token',
-
         info: {
             title: 'EmailEngine API',
             version: packageData.version,
 
-            description: `<strong>Authentication Required:</strong> You must provide an Access Token to use this API. (Generate your Access Token <a href="/admin/tokens" target="_parent">here</a>).
+            description: `EmailEngine provides a RESTful API for managing email accounts, sending messages, and processing email data across multiple providers.
 
-<strong>Note on Request Handling:</strong> Requests made to the same account are processed sequentially and are not executed in parallel. If a previous request is still processing, subsequent requests may be queued. In the event of a prolonged request, queued requests may time out before being executed by EmailEngine.`
+<h3>Authentication</h3>
+All API requests require authentication using an Access Token. You can generate and manage your tokens from the <a href="/admin/tokens" target="_parent"><strong>Access Tokens</strong></a> page.
+
+Include your token in requests using one of these methods:
+- Query parameter: <code>?access_token=YOUR_TOKEN</code>
+- Authorization header: <code>Authorization: Bearer YOUR_TOKEN</code>
+
+<h3>Request Processing</h3>
+
+<strong>Sequential Processing:</strong> Requests to the same email account are processed sequentially to maintain data consistency. Multiple simultaneous requests will be queued.
+
+<strong>Timeouts:</strong> Long-running operations may cause queued requests to timeout. Configure appropriate timeout values using the <code>X-EE-Timeout</code> header (in milliseconds).
+
+<h3>Getting Started</h3>
+1. <a href="/admin/tokens" target="_parent">Generate an Access Token</a>
+2. <a href="/admin/accounts" target="_parent">Add an email account</a>
+3. Start making API requests using the endpoints below`,
+
+            contact: {
+                name: 'EmailEngine Support',
+                url: 'https://emailengine.app/support',
+                email: 'support@emailengine.app'
+            },
+
+            license: {
+                name: 'EmailEngine License',
+                url: 'https://emailengine.dev/LICENSE_EMAILENGINE.txt'
+            }
+        },
+
+        externalDocs: {
+            description: 'EmailEngine Documentation',
+            url: 'https://emailengine.app/'
         },
 
         securityDefinitions: {
             bearerAuth: {
-                type: 'apiKey',
-                //scheme: 'bearer',
-                name: 'access_token',
-                in: 'query'
+                type: 'http',
+                scheme: 'bearer',
+                bearerFormat: 'JWT',
+                description: 'Enter your access token'
             }
         },
 
@@ -799,74 +932,101 @@ const init = async () => {
 
         tags: [
             {
-                name: 'Account'
+                name: 'Account',
+                description: 'Manage email accounts, including IMAP/SMTP configuration, OAuth2 authentication, and account health monitoring'
             },
             {
                 name: 'Mailbox',
-                description: 'Manage mailbox folders'
+                description: 'List, create, modify, and manage mailbox folders. Retrieve folder statistics and special-use designations'
             },
             {
-                name: 'Message'
+                name: 'Message',
+                description: 'Search, retrieve, update, and delete email messages. Manage flags, labels, and message content'
             },
             {
                 name: 'Submit',
+                description:
+                    'Send emails with attachments, reply to threads, forward messages, and upload to folders. Supports both immediate and scheduled sending',
                 externalDocs: {
-                    description: 'Documentation',
+                    description: 'Sending Emails Documentation',
                     url: 'https://emailengine.app/sending-emails'
                 }
             },
             {
                 name: 'Outbox',
-                description: 'Manage scheduled and pending emails in the sending queue'
+                description: 'Monitor and manage the email sending queue. View pending messages, retry failed deliveries, and track sending progress'
             },
             {
                 name: 'Delivery Test',
-                description: 'Test email deliverability, including SPF, DKIM, and DMARC alignment'
+                description: 'Test email deliverability and authentication. Verify SPF, DKIM signatures, DMARC alignment, and analyze potential delivery issues'
             },
             {
-                name: 'Access Tokens'
+                name: 'Access Tokens',
+                description: 'Create and manage API access tokens with customizable permissions, IP restrictions, and rate limits'
             },
             {
                 name: 'Settings',
-                description: 'Runtime configuration for EmailEngine'
+                description: 'Configure EmailEngine runtime settings including webhooks, tracking, AI features, and email processing options'
             },
             {
                 name: 'Templates',
-                description: 'Manage templates for sending emails',
+                description: 'Create and manage reusable email templates with variable substitution, HTML/text content, and attachments',
                 externalDocs: {
-                    description: 'Documentation',
+                    description: 'Email Templates Documentation',
                     url: 'https://emailengine.app/email-templates'
                 }
             },
             {
-                name: 'Logs'
+                name: 'Logs',
+                description: 'Access system and account-level logs for debugging, monitoring, and audit purposes'
             },
             {
-                name: 'Stats'
+                name: 'Stats',
+                description: 'Retrieve usage statistics, performance metrics, and account activity data',
+                externalDocs: {
+                    description: 'Monitoring and Analytics',
+                    url: 'https://emailengine.app/monitoring'
+                }
             },
             {
-                name: 'License'
+                name: 'License',
+                description: 'Manage EmailEngine licensing, view license status, and handle license-related operations'
             },
             {
-                name: 'Webhooks'
+                name: 'Webhooks',
+                description: 'Configure webhook endpoints, manage event subscriptions, and monitor webhook delivery status',
+                externalDocs: {
+                    description: 'Webhooks Guide',
+                    url: 'https://emailengine.app/webhooks'
+                }
             },
             {
                 name: 'OAuth2 Applications',
+                description: 'Configure OAuth2 applications for Gmail, Outlook, and other providers. Manage client credentials and authentication flows',
                 externalDocs: {
-                    description: 'Documentation',
+                    description: 'OAuth2 Configuration Guide',
                     url: 'https://emailengine.app/oauth2-configuration'
                 }
             },
             {
-                name: 'SMTP Gateway'
+                name: 'SMTP Gateway',
+                description: 'Configure and manage the built-in SMTP server for receiving emails and integrating with external systems'
             },
             {
-                name: 'Blocklists'
+                name: 'Blocklists',
+                description: 'Manage email address blocklists to prevent sending to specific recipients or domains'
             },
             {
-                name: 'Multi Message Actions'
+                name: 'Multi Message Actions',
+                description: 'Perform bulk operations on multiple messages simultaneously, such as marking as read, moving, or deleting'
             }
-        ]
+        ],
+
+        // Custom vendor extensions for additional metadata
+        'x-logo': {
+            url: 'https://emailengine.dev/static/logo.png',
+            altText: 'EmailEngine Logo'
+        }
     };
 
     await server.register(AuthBearer);
@@ -894,6 +1054,23 @@ const init = async () => {
                     if (/^scope:/.test(tag)) {
                         scope = tag.substr('scope:'.length);
                     }
+                }
+            }
+
+            if (token.startsWith('sess_') && scope === 'api') {
+                // seems like a session token
+                let isValidSessionToken = await tokens.validateSessionToken(
+                    request.state && request.state.ee && request.state.ee.sid,
+                    token,
+                    request.params.account,
+                    900
+                );
+                if (isValidSessionToken) {
+                    return {
+                        isValid: true,
+                        credentials: {},
+                        artifacts: {}
+                    };
                 }
             }
 
@@ -1055,6 +1232,13 @@ const init = async () => {
         // skip
     }
 
+    server.state('locale', {
+        ttl: null,
+        encoding: 'base64json',
+        clearInvalid: true,
+        path: '/'
+    });
+
     // Authentication for admin pages
     server.auth.strategy('session', 'cookie', {
         cookie: {
@@ -1182,7 +1366,8 @@ const init = async () => {
     ]);
 
     server.events.on('response', request => {
-        if (!/^\/v1\//.test(request.route.path)) {
+        const tags = request.route && request.route.settings && request.route.settings.tags;
+        if (!tags || !tags.includes('api')) {
             // only log API calls
             return;
         }
@@ -1217,7 +1402,8 @@ const init = async () => {
             file: { path: pathlib.join(__dirname, '..', 'static', 'favicon.ico'), confine: false }
         },
         options: {
-            auth: false
+            auth: false,
+            tags: ['static']
         }
     });
 
@@ -1228,7 +1414,8 @@ const init = async () => {
             file: { path: pathlib.join(__dirname, '..', 'static', 'licenses.html'), confine: false }
         },
         options: {
-            auth: false
+            auth: false,
+            tags: ['static']
         }
     });
 
@@ -1239,7 +1426,8 @@ const init = async () => {
             file: { path: pathlib.join(__dirname, '..', 'LICENSE_EMAILENGINE.txt'), confine: false }
         },
         options: {
-            auth: false
+            auth: false,
+            tags: ['static']
         }
     });
 
@@ -1250,7 +1438,8 @@ const init = async () => {
             file: { path: pathlib.join(__dirname, '..', 'LICENSE_EMAILENGINE.txt'), confine: false }
         },
         options: {
-            auth: false
+            auth: false,
+            tags: ['static']
         }
     });
 
@@ -1261,7 +1450,8 @@ const init = async () => {
             file: { path: pathlib.join(__dirname, '..', 'sbom.json'), confine: false }
         },
         options: {
-            auth: false
+            auth: false,
+            tags: ['static']
         }
     });
 
@@ -1291,7 +1481,8 @@ const init = async () => {
             file: { path: pathlib.join(__dirname, '..', 'static', 'robots.txt'), confine: false }
         },
         options: {
-            auth: false
+            auth: false,
+            tags: ['static']
         }
     });
 
@@ -1304,7 +1495,8 @@ const init = async () => {
             }
         },
         options: {
-            auth: false
+            auth: false,
+            tags: ['static']
         }
     });
 
@@ -1329,7 +1521,8 @@ const init = async () => {
         },
         options: {
             description: 'Health check',
-            auth: false
+            auth: false,
+            tags: ['static', 'health']
         }
     });
 
@@ -1730,42 +1923,62 @@ const init = async () => {
 
                 switch (entry.lifecycleEvent) {
                     case 'reauthorizationRequired': {
-                        // Extend subscription lifetime
+                        // Microsoft is requesting reauthorization - force renewal immediately
+                        request.logger.info({
+                            msg: 'Received reauthorizationRequired lifecycle event',
+                            subscriptionId: outlookSubscription.id,
+                            account: request.query.account
+                        });
 
-                        outlookSubscription.state = {
-                            state: 'renewing',
-                            time: Date.now()
-                        };
-                        await accountObject.update({ outlookSubscription });
+                        // Use the unified renewal method from OutlookClient
+                        // We need to create a client instance to call the renewal method
+                        const { OutlookClient } = require('../lib/email-client/outlook-client');
+                        const client = new OutlookClient(accountData, {
+                            redis,
+                            secret: await getSecret(),
+                            logger: request.logger
+                        });
 
-                        let subscriptionPayload = {
-                            expirationDateTime: new Date(Date.now() + OUTLOOK_EXPIRATION_TIME).toISOString()
-                        };
-
-                        let subscriptionRes;
                         try {
-                            subscriptionRes = await accountObject.oauth2Request(`/v1.0/subscriptions/${outlookSubscription.id}`, 'PATCH', subscriptionPayload);
-                            if (subscriptionRes && subscriptionRes.expirationDateTime) {
-                                outlookSubscription.expirationDateTime = subscriptionRes.expirationDateTime;
+                            // Force renewal when we get reauthorizationRequired
+                            const renewalResult = await client.renewSubscription(true);
+
+                            if (renewalResult.success) {
+                                request.logger.info({
+                                    msg: 'Successfully renewed subscription from lifecycle event',
+                                    subscriptionId: outlookSubscription.id,
+                                    account: request.query.account,
+                                    newExpirationDateTime: renewalResult.expirationDateTime
+                                });
+                            } else {
+                                request.logger.error({
+                                    msg: 'Failed to renew subscription from lifecycle event',
+                                    subscriptionId: outlookSubscription.id,
+                                    account: request.query.account,
+                                    reason: renewalResult.reason,
+                                    error: renewalResult.error
+                                });
                             }
-                            outlookSubscription.state = {
-                                state: 'created',
-                                time: Date.now()
-                            };
                         } catch (err) {
-                            outlookSubscription.state = {
-                                state: 'error',
-                                error: `Renewal failed: ${
-                                    (err.oauthRequest &&
-                                        err.oauthRequest.response &&
-                                        err.oauthRequest.response.error &&
-                                        err.oauthRequest.response.error.message) ||
-                                    err.message
-                                }`,
-                                time: Date.now()
-                            };
+                            request.logger.error({
+                                msg: 'Exception while renewing subscription from lifecycle event',
+                                subscriptionId: outlookSubscription.id,
+                                account: request.query.account,
+                                err
+                            });
                         } finally {
-                            await accountObject.update({ outlookSubscription });
+                            // Clean up client instance
+                            if (client && typeof client.close === 'function') {
+                                try {
+                                    await client.close();
+                                } catch (cleanupErr) {
+                                    request.logger.debug({
+                                        msg: 'Error closing client after lifecycle renewal',
+                                        account: request.query.account,
+                                        err: cleanupErr
+                                    });
+                                }
+                            }
                         }
 
                         break;
@@ -1870,32 +2083,75 @@ const init = async () => {
                         throw error;
                     }
 
-                    let profileRes;
-                    try {
-                        profileRes = await oAuth2Client.request(r.access_token, 'https://gmail.googleapis.com/gmail/v1/users/me/profile');
-                    } catch (err) {
-                        let response = err.oauthRequest && err.oauthRequest.response;
-                        if (response && response.error) {
-                            let message;
-                            if (/Gmail API has not been used in project/.test(response.error.message)) {
-                                message =
-                                    'Can not perform requests against Gmail API as the project has not been enabled. If you are the admin, check notifications on the dashboard.';
-                            } else {
-                                message = response.error.message;
-                            }
+                    const grantedScopes = r.scope ? r.scope.split(/\s+/) : [];
 
-                            let error = Boom.boomify(new Error(message), { statusCode: response.error.code });
-                            throw error;
+                    request.logger.info({ msg: 'OAuth token received', grantedScopes, hasIdToken: !!r.id_token });
+
+                    let profileRes;
+                    let userEmail;
+                    let userName;
+
+                    // With OpenID Connect scopes (openid, email, profile), the ID token contains user info
+                    // This works for all account types including send-only accounts
+                    if (r.id_token && typeof r.id_token === 'string') {
+                        let [, encodedValue] = r.id_token.split('.');
+                        if (encodedValue) {
+                            try {
+                                let decodedValue = JSON.parse(Buffer.from(encodedValue, 'base64url').toString());
+                                if (decodedValue && typeof decodedValue.email === 'string' && isEmail(decodedValue.email)) {
+                                    userEmail = decodedValue.email;
+                                    userName = decodedValue.name || null;
+                                    request.logger.info({ msg: 'Extracted user info from ID token', userEmail, userName });
+                                }
+                            } catch (err) {
+                                request.logger.error({ msg: 'Failed to decode Gmail ID token', err });
+                            }
                         }
-                        throw err;
                     }
 
-                    if (!profileRes || !profileRes || !profileRes.emailAddress) {
+                    // If ID token didn't provide email, fall back to Gmail API profile endpoint
+                    // This should rarely happen since we now request openid/email/profile scopes
+                    if (!userEmail) {
+                        // Check if we have scopes that allow accessing the profile endpoint
+                        const hasProfileScope =
+                            grantedScopes.includes('https://mail.google.com/') ||
+                            grantedScopes.includes('https://www.googleapis.com/auth/gmail.readonly') ||
+                            grantedScopes.includes('https://www.googleapis.com/auth/gmail.modify') ||
+                            grantedScopes.includes('https://www.googleapis.com/auth/gmail.metadata');
+
+                        if (hasProfileScope) {
+                            try {
+                                request.logger.info({ msg: 'Attempting Gmail profile endpoint as fallback' });
+                                profileRes = await oAuth2Client.request(r.access_token, 'https://gmail.googleapis.com/gmail/v1/users/me/profile');
+                                if (profileRes && profileRes.emailAddress) {
+                                    userEmail = profileRes.emailAddress;
+                                }
+                            } catch (err) {
+                                request.logger.error({ msg: 'Failed to fetch user info from Gmail API', err: err.message });
+                                let response = err.oauthRequest && err.oauthRequest.response;
+                                if (response && response.error) {
+                                    let message;
+                                    if (/Gmail API has not been used in project/.test(response.error.message)) {
+                                        message =
+                                            'Can not perform requests against Gmail API as the project has not been enabled. If you are the admin, check notifications on the dashboard.';
+                                    } else {
+                                        message = response.error.message;
+                                    }
+
+                                    let error = Boom.boomify(new Error(message), { statusCode: response.error.code });
+                                    throw error;
+                                }
+                                throw err;
+                            }
+                        }
+                    }
+
+                    if (!userEmail) {
                         let error = Boom.boomify(new Error(`Oauth failed: failed to retrieve account email address`), { statusCode: 400 });
                         throw error;
                     }
 
-                    accountData.email = isEmail(profileRes.emailAddress) ? profileRes.emailAddress : accountData.email;
+                    accountData.email = isEmail(userEmail) ? userEmail : accountData.email;
 
                     const defaultScopes = (oauth2App.baseScopes && GMAIL_SCOPES[oauth2App.baseScopes]) || GMAIL_SCOPES.imap;
 
@@ -1906,19 +2162,19 @@ const init = async () => {
                             accessToken: r.access_token,
                             refreshToken: r.refresh_token,
                             expires: new Date(Date.now() + r.expires_in * 1000),
-                            scope: r.scope ? r.scope.split(/\s+/) : defaultScopes,
+                            scope: grantedScopes.length ? grantedScopes : defaultScopes,
                             tokenType: r.token_type
                         },
                         {
                             auth: {
-                                user: profileRes.emailAddress
+                                user: userEmail
                             }
                         }
                     );
 
-                    accountData.googleHistoryId = Number(profileRes.historyId) || null;
+                    accountData.googleHistoryId = profileRes ? Number(profileRes.historyId) || null : null;
 
-                    request.logger.info({ msg: 'Provisioned OAuth2 tokens', user: profileRes.emailAddress, provider: oauth2App.provider });
+                    request.logger.info({ msg: 'Provisioned OAuth2 tokens', user: userEmail, provider: oauth2App.provider });
                     break;
                 }
 
@@ -2016,11 +2272,17 @@ const init = async () => {
                     }
 
                     if (accountData.oauth2 && accountData.oauth2.auth && accountData.oauth2.auth.delegatedUser) {
+                        // Delegated user (shared mailbox) specified in oauth2.auth.delegatedUser
                         authData.delegatedUser = accountData.oauth2.auth.delegatedUser;
+                        // Ensure email is set to the delegated user if not already provided
+                        if (!accountData.email) {
+                            accountData.email = accountData.oauth2.auth.delegatedUser;
+                        }
                     } else if (accountData.delegated && accountData.email && accountData.email !== userInfo.email) {
-                        // Shared mailbox
+                        // Legacy: Shared mailbox specified via delegated flag
                         authData.delegatedUser = accountData.email;
                     } else {
+                        // Not a delegated account, use the authenticated user's email
                         accountData.email = userInfo.email;
                     }
 
@@ -2110,6 +2372,7 @@ const init = async () => {
                 secret: await getSecret(),
                 timeout: request.headers['x-ee-timeout']
             });
+
             let result = await accountObject.create(accountData);
 
             if (accountMeta.n) {
@@ -2141,7 +2404,7 @@ const init = async () => {
             return h.view(
                 'redirect',
                 {
-                    pageTitleFull: gt.gettext('Email Account Setup'),
+                    pageTitleFull: request.app.gt.gettext('Email Account Setup'),
                     httpRedirectUrl
                 },
                 {
@@ -3298,7 +3561,7 @@ const init = async () => {
                         .example('connected')
                         .description('Filter accounts by state')
                         .label('AccountState'),
-                    query: Joi.string().example('user@example').description('Filter accounts by string match').label('AccountQuery')
+                    query: Joi.string().example('user@example.com').description('Filter accounts by string match').label('AccountQuery')
                 }).label('AccountsFilter')
             },
 
@@ -3425,7 +3688,12 @@ const init = async () => {
                     oauth2App = await oauth2Apps.get(accountData.oauth2.provider);
 
                     if (oauth2App) {
-                        result.type = oauth2App.provider;
+                        // Check if account is already marked as send-only
+                        if (accountData.sendOnly) {
+                            result.sendOnly = true;
+                        } else {
+                            result.type = oauth2App.provider;
+                        }
                         if (oauth2App.id !== oauth2App.provider) {
                             result.app = oauth2App.id;
                         }
@@ -3439,6 +3707,7 @@ const init = async () => {
                     result.type = 'imap';
                 } else {
                     result.type = 'sending';
+                    result.sendOnly = true;
                 }
 
                 if ((accountData.imap || (oauth2App && (!oauth2App.baseScopes || oauth2App.baseScopes === 'imap'))) && !result.imapIndexer) {
@@ -3457,7 +3726,7 @@ const init = async () => {
                     result.counters = accountData.counters;
                 }
 
-                if (request.query.quota) {
+                if (request.query.quota && !result.sendOnly) {
                     result.quota = await accountObject.getQuota();
                 }
 
@@ -3779,7 +4048,7 @@ const init = async () => {
             });
 
             try {
-                return await accountObject.renameMailbox(request.payload.path, request.payload.newPath);
+                return await accountObject.modifyMailbox(request.payload.path, request.payload.newPath, request.payload.subscribed);
             } catch (err) {
                 request.logger.error({ msg: 'API request failed', err });
                 if (Boom.isBoom(err)) {
@@ -3797,8 +4066,8 @@ const init = async () => {
         },
 
         options: {
-            description: 'Rename mailbox',
-            notes: 'Rename an existing mailbox folder',
+            description: 'Modify mailbox',
+            notes: 'Modify an existing mailbox folder (rename or change subscription status)',
             tags: ['api', 'Mailbox'],
 
             plugins: {},
@@ -3822,22 +4091,29 @@ const init = async () => {
                 }),
 
                 payload: Joi.object({
-                    path: Joi.string().required().example('Previous Folder Name').description('Mailbox folder path to rename').label('ExistingMailboxPath'),
+                    path: Joi.string().required().example('Folder Name').description('Mailbox folder path to modify').label('ExistingMailboxPath'),
                     newPath: Joi.array()
                         .items(Joi.string().max(256))
                         .single()
                         .example(['Parent folder', 'Subfolder'])
-                        .description('New mailbox path as an array or a string. If account is namespaced then namespace prefix is added by default.')
-                        .label('TargetMailboxPath')
-                }).label('RenameMailbox')
+                        .description('New mailbox path as an array or a string. If account is namespaced then namespace prefix is added by default. Optional.')
+                        .label('TargetMailboxPath'),
+                    subscribed: Joi.boolean()
+                        .example(true)
+                        .description('Change mailbox subscription status. Only applies to IMAP accounts, ignored for Gmail and Outlook.')
+                        .label('SubscriptionStatus')
+                })
+                    .or('newPath', 'subscribed')
+                    .label('ModifyMailbox')
             },
 
             response: {
                 schema: Joi.object({
-                    path: Joi.string().required().example('Previous Mail').description('Mailbox folder path to rename').label('ExistingMailboxPath'),
-                    newPath: Joi.string().required().example('Kalender/S&APw-nnip&AOQ-evad').description('Full path to mailbox').label('NewMailboxPath'),
-                    renamed: Joi.boolean().example(true).description('Was the mailbox renamed')
-                }).label('RenameMailboxResponse'),
+                    path: Joi.string().required().example('Mail').description('Mailbox folder path').label('ExistingMailboxPath'),
+                    newPath: Joi.string().example('Kalender/S&APw-nnip&AOQ-evad').description('Full path to mailbox if renamed').label('NewMailboxPath'),
+                    renamed: Joi.boolean().example(true).description('Was the mailbox renamed'),
+                    subscribed: Joi.boolean().example(true).description('Subscription status after modification')
+                }).label('ModifyMailboxResponse'),
                 failAction: 'log'
             }
         }
@@ -4382,14 +4658,14 @@ const init = async () => {
             response: {
                 schema: Joi.object({
                     flags: Joi.object({
-                        add: Joi.boolean().example(true),
-                        delete: Joi.boolean().example(false),
-                        set: Joi.boolean().example(false)
+                        add: Joi.array().items(Joi.string()).example(['\\Seen', '\\Flagged']),
+                        delete: Joi.array().items(Joi.string()).example(['\\Draft']),
+                        set: Joi.array().items(Joi.string()).example(['\\Seen'])
                     }).label('FlagResponse'),
                     labels: Joi.object({
-                        add: Joi.boolean().example(true),
-                        delete: Joi.boolean().example(false),
-                        set: Joi.boolean().example(false)
+                        add: Joi.array().items(Joi.string()).example(['Label1', 'Label2']),
+                        delete: Joi.array().items(Joi.string()).example(['Label3']),
+                        set: Joi.array().items(Joi.string()).example(['Label1'])
                     }).label('FlagResponse')
                 }).label('MessageUpdateResponse'),
                 failAction: 'log'
@@ -4461,14 +4737,14 @@ const init = async () => {
             response: {
                 schema: Joi.object({
                     flags: Joi.object({
-                        add: Joi.boolean().example(true),
-                        delete: Joi.boolean().example(false),
-                        set: Joi.boolean().example(false)
+                        add: Joi.array().items(Joi.string()).example(['\\Seen', '\\Flagged']),
+                        delete: Joi.array().items(Joi.string()).example(['\\Draft']),
+                        set: Joi.array().items(Joi.string()).example(['\\Seen'])
                     }).label('FlagResponse'),
                     labels: Joi.object({
-                        add: Joi.boolean().example(true),
-                        delete: Joi.boolean().example(false),
-                        set: Joi.boolean().example(false)
+                        add: Joi.array().items(Joi.string()).example(['Label1', 'Label2']),
+                        delete: Joi.array().items(Joi.string()).example(['Label3']),
+                        set: Joi.array().items(Joi.string()).example(['Label1'])
                     }).label('FlagResponse')
                 }).label('MessageUpdateResponse'),
                 failAction: 'log'
@@ -5272,7 +5548,8 @@ const init = async () => {
             try {
                 return await accountObject.queueMessage(request.payload, {
                     source: 'api',
-                    idempotencyKey: request.headers['idempotency-key']
+                    idempotencyKey: request.headers['idempotency-key'],
+                    useStructuredFormat: request.query.useStructuredFormat
                 });
             } catch (err) {
                 request.logger.error({ msg: 'API request failed', err });
@@ -5318,6 +5595,21 @@ const init = async () => {
                 params: Joi.object({
                     account: accountIdSchema.required()
                 }),
+
+                query: Joi.object({
+                    documentStore: Joi.boolean()
+                        .truthy('Y', 'true', '1')
+                        .falsy('N', 'false', 0)
+                        .default(false)
+                        .description('If enabled then fetch email used as a reference template from the Document Store'),
+                    useStructuredFormat: Joi.boolean()
+                        .truthy('Y', 'true', '1')
+                        .falsy('N', 'false', 0)
+                        .default(false)
+                        .description(
+                            'For MS Graph accounts: If true, uses structured JSON format (respects from field for shared mailboxes, breaks calendar invites and special MIME types). If false, sends as raw MIME (preserves calendar invites, ignores from field). Default is false (raw MIME).'
+                        )
+                }).label('SubmitQuery'),
 
                 headers: Joi.object({
                     'x-ee-timeout': headerTimeoutSchema,
@@ -6321,7 +6613,7 @@ const init = async () => {
 
         async handler(request) {
             try {
-                let serverSettings = await autodetectImapSettings(request.query.email);
+                let serverSettings = await autodetectImapSettings(request.query.email, request.app.gt);
                 return serverSettings;
             } catch (err) {
                 request.logger.error({ msg: 'API request failed', err });
@@ -8761,7 +9053,9 @@ ${now}`,
                 notificationBaseUrl,
 
                 userLocale: locale,
-                userTimezone: timezone
+                userTimezone: timezone,
+
+                templateLocale: request.app.locale
             };
         }
     });
@@ -8789,8 +9083,8 @@ ${now}`,
         const ctx = {
             message:
                 error.output.statusCode === 404
-                    ? 'page not found'
-                    : (error.output && error.output.payload && error.output.payload.message) || 'something went wrong',
+                    ? request.app.gt.gettext('Requested page not found')
+                    : (error.output && error.output.payload && error.output.payload.message) || request.app.gt.gettext('Something went wrong'),
             details: error.output && error.output.payload && error.output.payload.details
         };
 
@@ -8819,7 +9113,10 @@ ${now}`,
             return res.code(request.errorInfo.statusCode || 500);
         }
 
-        if (/^\/v1\//.test(request.path) || /^\/health$|\/test$/.test(request.path)) {
+        const tags = (request.route && request.route.settings && request.route.settings.tags) || [];
+        const isApiRoute = tags.includes('api') || tags.includes('test');
+
+        if (isApiRoute) {
             // API path
             return h.response(request.errorInfo).code(request.errorInfo.statusCode || 500);
         }
@@ -8901,8 +9198,8 @@ ${now}`,
     server.route({
         method: '*',
         path: '/{any*}',
-        async handler() {
-            throw Boom.notFound('Requested page not found'); // 404
+        async handler(request) {
+            throw Boom.notFound(request.app.gt.gettext('Requested page not found')); // 404
         }
     });
 
@@ -8973,6 +9270,15 @@ init()
         });
 
         parentPort.postMessage({ cmd: 'ready' });
+
+        // Start sending heartbeats to main thread
+        setInterval(() => {
+            try {
+                parentPort.postMessage({ cmd: 'heartbeat' });
+            } catch (err) {
+                // Ignore errors, parent might be shutting down
+            }
+        }, 10 * 1000).unref();
     })
     .catch(err => {
         logger.error({ msg: 'Failed to initialize API', err });

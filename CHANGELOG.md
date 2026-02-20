@@ -1,5 +1,247 @@
 # Changelog
 
+## [2.58.0](https://github.com/postalsys/emailengine/compare/v2.57.3...v2.58.0) (2025-10-27)
+
+
+### Features
+
+* **outlook:** Add MS Graph API category support via labels API ([7de3586](https://github.com/postalsys/emailengine/commit/7de35863d4922ebd4fde4a2e448649a29bfc00b3))
+* **outlook:** Add optional structured format for MS Graph sendMail ([5062e84](https://github.com/postalsys/emailengine/commit/5062e845fe29f16cdb7cce23b767657e1b283dfb))
+
+
+### Bug Fixes
+
+* **gmail:** Exclude OpenID scopes from service account authentication ([faf7821](https://github.com/postalsys/emailengine/commit/faf7821ddac184ba481c9acc9f0a38d2baaf834c))
+* **outlook:** Improve delegated user handling and add clarifying comments ([cef7d25](https://github.com/postalsys/emailengine/commit/cef7d25fe1726e029181566622e156309c800f8a))
+* **outlook:** Preserve calendar invite functionality when sending via Graph API ([92bd7f8](https://github.com/postalsys/emailengine/commit/92bd7f89c93e5998da400986fe698aff9c4d7fc0))
+* **outlook:** Use structured message format for Graph API sendMail to respect from field ([c1bf874](https://github.com/postalsys/emailengine/commit/c1bf8745fc0ceb0013428065a1dcb932781ae3de))
+
+## [2.57.3](https://github.com/postalsys/emailengine/compare/v2.57.2...v2.57.3) (2025-10-23)
+
+
+### Bug Fixes
+
+* **attachments:** Bumped Nodemailer for fix issue with large data-uri images in emails ([64a498c](https://github.com/postalsys/emailengine/commit/64a498cccc8123958761c99e33164849378f2d07))
+
+## [2.57.2](https://github.com/postalsys/emailengine/compare/v2.57.1...v2.57.2) (2025-10-23)
+
+
+### Bug Fixes
+
+* **attachments:** Bumped Nodemailer for fix issue with large data-uri images in emails ([44cd002](https://github.com/postalsys/emailengine/commit/44cd002933635435626739e395bfdf8ba9679be2))
+
+## [2.57.1](https://github.com/postalsys/emailengine/compare/v2.57.0...v2.57.1) (2025-10-20)
+
+
+### Bug Fixes
+
+* Add retry logic for transient errors when fetching referenced messages ([9312f4b](https://github.com/postalsys/emailengine/commit/9312f4bcc95b2423e4bd98e3eeef1230aa02fcb9))
+* Correct OpenAPI response schema and add Docker CLI support ([38d39d6](https://github.com/postalsys/emailengine/commit/38d39d615d7e268261f4d8b49a7e79a943d9c553))
+* Ensure mailbox ID persistence during flush ([bb26992](https://github.com/postalsys/emailengine/commit/bb26992f110e640fa0f98f64dd714a20ac35c085))
+
+## [2.57.0](https://github.com/postalsys/emailengine/compare/v2.56.0...v2.57.0) (2025-10-09)
+
+
+### Features
+
+* Add support for Gmail send-only accounts ([#554](https://github.com/postalsys/emailengine/issues/554)) ([47fb593](https://github.com/postalsys/emailengine/commit/47fb593cfe390f066bd99ff84257abb036782d64))
+* Add support for Outlook send-only accounts ([6b63ee4](https://github.com/postalsys/emailengine/commit/6b63ee4dff1feff087ab65e6233317cae8a4aad7))
+
+## [2.56.0](https://github.com/postalsys/emailengine/compare/v2.55.8...v2.56.0) (2025-10-05)
+
+
+### Features
+
+* **api:** Add mailbox subscription management to modify endpoint ([4578c8a](https://github.com/postalsys/emailengine/commit/4578c8a89f56725ec02a3d9e2418c141acea4db1))
+
+## [2.55.8](https://github.com/postalsys/emailengine/compare/v2.55.7...v2.55.8) (2025-09-29)
+
+
+### Bug Fixes
+
+* Fixed build ([ac5d3b4](https://github.com/postalsys/emailengine/commit/ac5d3b4b700752e42acd0b7028bfdf622eac1f0a))
+
+## [2.55.7](https://github.com/postalsys/emailengine/compare/v2.55.6...v2.55.7) (2025-09-29)
+
+
+### Bug Fixes
+
+* Bumped email-text-tools to fix webSafe processing ([ae6f2f1](https://github.com/postalsys/emailengine/commit/ae6f2f149ab675faaa9de5490809400b5c24996d))
+
+## [2.55.6](https://github.com/postalsys/emailengine/compare/v2.55.5...v2.55.6) (2025-09-26)
+
+
+### Bug Fixes
+
+* race condition in runFullSync and add diagnostic logging ([#549](https://github.com/postalsys/emailengine/issues/549)) ([cdb3fe1](https://github.com/postalsys/emailengine/commit/cdb3fe18b2494cc02f1e50e98ffddf0003329dd2))
+
+## [2.55.5](https://github.com/postalsys/emailengine/compare/v2.55.4...v2.55.5) (2025-09-19)
+
+
+### Bug Fixes
+
+* **outlook:** Fix MS Graph webhook subscription expiration issues ([1153313](https://github.com/postalsys/emailengine/commit/1153313868fae506cee9c13805628fddf6101e17))
+
+## [2.55.4](https://github.com/postalsys/emailengine/compare/v2.55.3...v2.55.4) (2025-09-14)
+
+
+### Bug Fixes
+
+* Replace v8.getHeapStatistics with process.memoryUsage to prevent SEGV errors ([918dba7](https://github.com/postalsys/emailengine/commit/918dba7682a6e50f6aec8c91fe1e35a3f0eb2928))
+* Simplify memory display in internals page ([8dc284b](https://github.com/postalsys/emailengine/commit/8dc284b90360f747dd0c7d98115b5352544a028b))
+* Update internals page to handle new memory usage format ([cf0de82](https://github.com/postalsys/emailengine/commit/cf0de827b17b13e9234d347f5f6686de29bfb7d2))
+
+## [2.55.3](https://github.com/postalsys/emailengine/compare/v2.55.2...v2.55.3) (2025-09-11)
+
+
+### Bug Fixes
+
+* Remove CPU metrics collection to prevent potential native code issues ([350afc2](https://github.com/postalsys/emailengine/commit/350afc2a74e2935f74ad0b00110cd6e67eafc5b0))
+* **webhooks:** Show more informational messages when webhooks fail ([0712f0a](https://github.com/postalsys/emailengine/commit/0712f0a0d547b61ba95be34346523ee8fe32210f))
+
+## [2.55.2](https://github.com/postalsys/emailengine/compare/v2.55.1...v2.55.2) (2025-09-03)
+
+
+### Bug Fixes
+
+* **oauth:** Update Redis hash mapping when OAuth email changes ([82c1d89](https://github.com/postalsys/emailengine/commit/82c1d89dcf81edc198bcdf3dcc266506cb534da2))
+* **webhooks:** Explicitly set Content-Length to prevent undici mismatch errors ([40cb42d](https://github.com/postalsys/emailengine/commit/40cb42dfefdbc55eb2eca5c61c15565de5e85d8e))
+
+## [2.55.1](https://github.com/postalsys/emailengine/compare/v2.55.0...v2.55.1) (2025-08-29)
+
+
+### Bug Fixes
+
+* **memory:** Add LRU-based cleanup for SMTP connection pools ([fba58e8](https://github.com/postalsys/emailengine/commit/fba58e8069d74a0738cebab478188eee31749678))
+* **metrics:** Implement background metrics collection to prevent CPU spikes ([b0a200a](https://github.com/postalsys/emailengine/commit/b0a200a8e491bddcf1a3896e12253523036ad339))
+* **redis:** Add recovery mechanism for disconnected accounts after Redis reconnection ([ac9737a](https://github.com/postalsys/emailengine/commit/ac9737a98bdb50220278e809de408582f789cf05))
+* **redis:** Improve Redis reconnection handling for IMAP workers ([de7327e](https://github.com/postalsys/emailengine/commit/de7327e08ca676607433890060f045bbc851a3a7))
+
+## [2.55.0](https://github.com/postalsys/emailengine/compare/v2.54.5...v2.55.0) (2025-08-28)
+
+
+### Features
+
+* **health:** Add worker health monitoring with heartbeat system ([34724e8](https://github.com/postalsys/emailengine/commit/34724e876a021d6de30bffff54856bb9a2c6ef76))
+* **internals:** Add CPU monitoring for worker threads ([8aa9be5](https://github.com/postalsys/emailengine/commit/8aa9be5ab7a09c7d12745d2ddc3632da868d0bcb))
+* **resilience:** Add circuit breaker pattern for worker communication ([79ea27a](https://github.com/postalsys/emailengine/commit/79ea27aed0ae7c5c856746809d43f53bacf3ed2b))
+
+
+### Bug Fixes
+
+* **flush:** Allow flushing non-connected accounts ([07eebc5](https://github.com/postalsys/emailengine/commit/07eebc55ba2d4341d92fb7a1d9078449750b2a7c))
+* **imap:** Fix uneven IMAP worker thread distribution ([339f0e0](https://github.com/postalsys/emailengine/commit/339f0e0b8f7a382a42c29460526a9ddfac91a0fe))
+* **imap:** Prevent 100% CPU usage from reconnection loops ([4d1bf7d](https://github.com/postalsys/emailengine/commit/4d1bf7da53d299f0b203eb09b4ec790848c6cf09))
+* **internals:** Handle unresponsive workers gracefully in admin internals page ([2a2d94b](https://github.com/postalsys/emailengine/commit/2a2d94b916e32b7a5f8a2741dbd8fbb265b98605))
+* **lint:** Remove unused HEARTBEAT_INTERVAL constant and add npm lint script ([19209ab](https://github.com/postalsys/emailengine/commit/19209ab254bfa1262fa5e34f994db51ebca61f5a))
+* **lua:** Fix bugs and add documentation to Redis Lua scripts ([1c4889f](https://github.com/postalsys/emailengine/commit/1c4889f9e055e3c9b16b11513583abc494c92a15))
+
+## [2.54.5](https://github.com/postalsys/emailengine/compare/v2.54.4...v2.54.5) (2025-08-26)
+
+
+### Bug Fixes
+
+* Bumped ImapFlow to decrease load on CPU ([227894d](https://github.com/postalsys/emailengine/commit/227894dbbc68f6b7d5cf5322d1010678940107c1))
+* **env:** Added EENGINE_DISABLE_MESSAGE_BROWSER, fixed EENGINE_ADMIN_ACCESS_ADDRESSES regression bug ([4d922ff](https://github.com/postalsys/emailengine/commit/4d922ff9c7eb7ca6839657430adc3df7013a7204))
+* Fixed checking nil against a number ([eee7294](https://github.com/postalsys/emailengine/commit/eee7294d1e4cd328ba1cff8aeb704d86a6fd767f))
+
+## [2.54.4](https://github.com/postalsys/emailengine/compare/v2.54.3...v2.54.4) (2025-08-14)
+
+
+### Bug Fixes
+
+* **imap:** Fixed subconnection error handling ([5367c77](https://github.com/postalsys/emailengine/commit/5367c77f88690a3636049e0690d2f674e1528a30))
+* **install:** Fixed Redis password generation for the install script ([bf5853e](https://github.com/postalsys/emailengine/commit/bf5853e0c394a98d3bad079293dd5e73206d5183))
+
+## [2.54.3](https://github.com/postalsys/emailengine/compare/v2.54.2...v2.54.3) (2025-08-13)
+
+
+### Bug Fixes
+
+* Bumped ImapFlow module for improved IMAP handling stability ([5f7ce73](https://github.com/postalsys/emailengine/commit/5f7ce73eb270f3f92fdd17398842ad003c628612))
+
+## [2.54.2](https://github.com/postalsys/emailengine/compare/v2.54.1...v2.54.2) (2025-08-05)
+
+
+### Bug Fixes
+
+* dark mode support for message browser ([59d3c31](https://github.com/postalsys/emailengine/commit/59d3c31d58ea46d31b9908188b599c2169da87f7))
+* **delegated:** Fixed mailbox listing for delegated OAuth2 accounts ([9fc74fd](https://github.com/postalsys/emailengine/commit/9fc74fd41e00a92eb121a85efa134947497de608))
+* limit session token usage for the message browser ([41ead92](https://github.com/postalsys/emailengine/commit/41ead924917930f828f996b43c6a16a73c8c7bb9))
+* message browser uses theme based confirm instead of sync javascript confirm ([9409d2c](https://github.com/postalsys/emailengine/commit/9409d2c7e4a93fd9ab16876baf52294968511840))
+* **verify:** Slightly faster account data verification ([3e27d5e](https://github.com/postalsys/emailengine/commit/3e27d5e75f4a59e97aca7a3eff8a041c3d540935))
+
+## [2.54.1](https://github.com/postalsys/emailengine/compare/v2.54.0...v2.54.1) (2025-08-03)
+
+
+### Bug Fixes
+
+* **oauth2:** Fixed issues with OAuth2 periodic renewals (subscriptions etc) ([046bd55](https://github.com/postalsys/emailengine/commit/046bd5585f24d8184a4cca7484afbb3fda93fbf4))
+
+## [2.54.0](https://github.com/postalsys/emailengine/compare/v2.53.3...v2.54.0) (2025-08-01)
+
+
+### Features
+
+* **ui:** Added message browser to account view ([a1e27d8](https://github.com/postalsys/emailengine/commit/a1e27d8004631d62849ba7f08451eec0cc731cca))
+
+
+### Bug Fixes
+
+* move from OAS v2 to OAS v3 ([49e7018](https://github.com/postalsys/emailengine/commit/49e7018d8003397bce7383c7aac6b39c1ff1e3d0))
+* normalize OAuth2 subscription keys ([a400e73](https://github.com/postalsys/emailengine/commit/a400e7397d509ef6bba1a47d7dd8535b019862c4))
+* Show the token description on the delete token confirmation modal ([495af4f](https://github.com/postalsys/emailengine/commit/495af4fb860e705b983674a5e8d708a09ef9de20))
+
+## [2.53.3](https://github.com/postalsys/emailengine/compare/v2.53.2...v2.53.3) (2025-07-17)
+
+
+### Bug Fixes
+
+* **delegated-oauth:** Handle delegated MS Graph account properly if created using delegated=true ([4cece01](https://github.com/postalsys/emailengine/commit/4cece016eac3033aae14422a31444c93c8375423))
+* **MS-Graph:** Fixed IMAP and SMTP hosts for Government Cloud accounts ([e78a9cb](https://github.com/postalsys/emailengine/commit/e78a9cb6c480c740c2c3abb9b50a8c7c7f6e7ee7))
+* **no-active-handler:** Fixed response code 200 for No Active Handler response ([067a37b](https://github.com/postalsys/emailengine/commit/067a37b4326d4ab0f4d2ae188220a0716921c0f0))
+* **search:** Prefer WITHIN extension and YOUNGER/OLDER for SINCE/BEFORE searches ([34d5889](https://github.com/postalsys/emailengine/commit/34d5889b84812537ca592089f58abde5d4005223))
+
+## [2.53.2](https://github.com/postalsys/emailengine/compare/v2.53.1...v2.53.2) (2025-07-09)
+
+
+### Bug Fixes
+
+* **language:** Added language selection with ?locale=et query argument ([b911ec3](https://github.com/postalsys/emailengine/commit/b911ec31e93c75be281d7f79f18b9dcbab2ba1cb))
+* **no active handler:** Return 503 error, not 200 ([d1e0702](https://github.com/postalsys/emailengine/commit/d1e070292df2000005cca2f000094fc21e5d43df))
+* **smtp:** Improved Message-ID rewriting detection for AWS SES ([fbe7ff3](https://github.com/postalsys/emailengine/commit/fbe7ff3b99b4142cc263d15dcea47733f343a2ce))
+* Special envelope handling for LarkSuite accounts ([f448d39](https://github.com/postalsys/emailengine/commit/f448d39ecb958f926c05a28d7ad3ca110f16c17a))
+
+## [2.53.1](https://github.com/postalsys/emailengine/compare/v2.53.0...v2.53.1) (2025-07-04)
+
+
+### Bug Fixes
+
+* **multi-operations:** Added new search term 'emailIds', if set it will use the predefined email IDs instead of executing the search ([aac3aab](https://github.com/postalsys/emailengine/commit/aac3aab65e1eea3b51ea302b5634f3e2b1a30063))
+* removed dotenv debug log line ([9c5fc1b](https://github.com/postalsys/emailengine/commit/9c5fc1b4b3cb1c38c7604eec75f5427bf0f8482b))
+* **webhooks:** Include a HMAC signature in webhook headers ([7516188](https://github.com/postalsys/emailengine/commit/75161881c9100c2d5a2bec22790aa3311a2de87f))
+
+## [2.53.0](https://github.com/postalsys/emailengine/compare/v2.52.6...v2.53.0) (2025-06-30)
+
+
+### Features
+
+* Use persistent SMTP connections instead of logging separately for every email sent by the same account ([866e24f](https://github.com/postalsys/emailengine/commit/866e24fd06760ab92752629b259577fcf620b781))
+
+
+### Bug Fixes
+
+* Bumped deps to fix formwat=flowed parsing issue ([efffe4e](https://github.com/postalsys/emailengine/commit/efffe4e7be778667a1119343e71e86817e1dc71e))
+
+## [2.52.6](https://github.com/postalsys/emailengine/compare/v2.52.5...v2.52.6) (2025-06-23)
+
+
+### Bug Fixes
+
+* Reverted ICOn handling for windows app ([7abba87](https://github.com/postalsys/emailengine/commit/7abba87b749ed36ccd663dabfc26fa7a2d2b320d))
+* **submit:** Added configuration ENV option EENGINE_SUBMIT_DELAY / --submitDelay=duration argument to allow rate limiting message sending (this is global, not account specific) ([531caad](https://github.com/postalsys/emailengine/commit/531caadb00d8b7d8710668509845d9452c9c924d))
+* **translations:** Allow changing active language with ?lang=lang_code query argument ([1f2a0e6](https://github.com/postalsys/emailengine/commit/1f2a0e6070a9dfa5989e6055648fb1d0f4d8c095))
+
 ## [2.52.5](https://github.com/postalsys/emailengine/compare/v2.52.4...v2.52.5) (2025-05-20)
 
 

@@ -60,6 +60,8 @@ const EENGINE_TIMEOUT = getDuration(readEnvValue('EENGINE_TIMEOUT') || config.se
 
 const SUBMIT_QC = (readEnvValue('EENGINE_SUBMIT_QC') && Number(readEnvValue('EENGINE_SUBMIT_QC'))) || config.queues.submit || 1;
 
+const SUBMIT_DELAY = getDuration(readEnvValue('EENGINE_SUBMIT_DELAY') || config.submitDelay) || null;
+
 let callQueue = new Map();
 let mids = 0;
 
@@ -325,7 +327,14 @@ const submitWorker = new Worker(
     },
     Object.assign(
         {
-            concurrency: SUBMIT_QC
+            concurrency: SUBMIT_QC,
+
+            limiter: SUBMIT_DELAY
+                ? {
+                      max: 1,
+                      duration: SUBMIT_DELAY
+                  }
+                : null
         },
         queueConf
     )
@@ -411,6 +420,18 @@ async function onCommand(command) {
             return 999;
     }
 }
+
+// Start sending heartbeats to main thread
+setInterval(() => {
+    try {
+        parentPort.postMessage({ cmd: 'heartbeat' });
+    } catch (err) {
+        // Ignore errors, parent might be shutting down
+    }
+}, 10 * 1000).unref();
+
+// Send initial ready signal
+parentPort.postMessage({ cmd: 'ready' });
 
 parentPort.on('message', message => {
     if (message && message.cmd === 'resp' && message.mid && callQueue.has(message.mid)) {
