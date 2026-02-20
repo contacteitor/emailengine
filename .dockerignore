@@ -1,0 +1,15 @@
+.git
+node_modules
+npm-debug.log*
+.env
+.env.*
+*.log
+k8s/
+.github/
+*.tar.gz
+*.md
+.dockerignore
+Dockerfile*
+docker-compose*
+fascan.yml
+keylog.txt
