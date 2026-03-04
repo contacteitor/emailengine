@@ -1,25 +1,27 @@
-#  node:22.13.1-alpine
-FROM --platform=${TARGETPLATFORM} node@sha256:e2b39f7b64281324929257d0f8004fb6cb4bf0fdfb9aa8cedb235a766aec31da
+# =============================================================================
+# EmailEngine - Dockerfile optimizado para Kubernetes (multi-stage)
+# =============================================================================
 
-ARG BUILDPLATFORM
-ARG TARGETPLATFORM
-ARG TARGETARCH
-ARG TARGETVARIANT
-RUN printf "I'm building for TARGETPLATFORM=${TARGETPLATFORM}" \
-    && printf ", BUILDPLATFORM=${BUILDPLATFORM}" \
-    && printf ", TARGETARCH=${TARGETARCH}" \
-    && printf ", TARGETVARIANT=${TARGETVARIANT} \n" \
-    && printf "With uname -s : " && uname -s \
-    && printf "and  uname -m : " && uname -mm
-
-RUN apk add --no-cache dumb-init
-
-# Create a non-root user and group
-RUN addgroup -S emailenginegroup && adduser -S emailengineuser -G emailenginegroup
+# -----------------------------------------------------------------------------
+# Stage 1: deps — instala dependencias de producción (cacheado si package.json no cambia)
+# -----------------------------------------------------------------------------
+FROM --platform=${TARGETPLATFORM} node:22-alpine AS deps
 
 WORKDIR /emailengine
 
-# Copy app folders
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev && npm cache clean --force
+
+# -----------------------------------------------------------------------------
+# Stage 2: builder — copia código y genera version-info
+# -----------------------------------------------------------------------------
+FROM --platform=${TARGETPLATFORM} node:22-alpine AS builder
+
+ARG COMMIT_SHA
+WORKDIR /emailengine
+
+COPY --from=deps /emailengine/node_modules ./node_modules
+
 COPY config config
 COPY data data
 COPY lib lib
@@ -27,35 +29,66 @@ COPY static static
 COPY translations translations
 COPY views views
 COPY workers workers
+COPY LICENSE_EMAILENGINE.txt .
+COPY package.json .
+COPY sbom.json .
+COPY server.js .
+COPY update-info.sh .
 
-# Copy required root level files
-COPY LICENSE_EMAILENGINE.txt LICENSE_EMAILENGINE.txt
-COPY package.json package.json
-COPY package-lock.json package-lock.json
-COPY sbom.json sbom.json
-COPY server.js server.js
+RUN mkdir -p .git/refs/heads && \
+    echo "${COMMIT_SHA:-unknown}" > .git/refs/heads/master && \
+    chmod +x ./update-info.sh && \
+    ./update-info.sh && \
+    node -e "require('./node_modules/dotenv')" 2>/dev/null || true
 
-RUN mkdir -p .git/refs/heads
-COPY .git/refs/heads/master .git/refs/heads/master
+# -----------------------------------------------------------------------------
+# Stage 3: production — imagen final mínima
+# -----------------------------------------------------------------------------
+FROM --platform=${TARGETPLATFORM} node:22-alpine AS production
 
-COPY update-info.sh update-info.sh
+ARG BUILDPLATFORM
+ARG TARGETPLATFORM
+ARG TARGETARCH
+ARG COMMIT_SHA
+ARG BUILD_TIME
 
-RUN npm ci --omit=dev
-RUN npm run prepare-docker
-RUN chmod +x ./update-info.sh
-RUN ./update-info.sh
+LABEL org.opencontainers.image.title="EmailEngine" \
+      org.opencontainers.image.description="Email Sync Engine - Clientify" \
+      org.opencontainers.image.vendor="Clientify" \
+      org.opencontainers.image.source="https://github.com/contacteitor/emailengine" \
+      org.opencontainers.image.revision="${COMMIT_SHA}" \
+      org.opencontainers.image.created="${BUILD_TIME}"
 
-# Ensure permissions are set correctly for the non-root user
-RUN chown -R emailengineuser:emailenginegroup /emailengine
+RUN apk add --no-cache dumb-init curl
 
-RUN node -e "console.log('node arch: ' + os.arch())"
-RUN node -e "console.log(process.versions)"
+RUN addgroup -S emailenginegroup && adduser -S emailengineuser -G emailenginegroup
 
-# Switch to non-root user
+WORKDIR /emailengine
+
+COPY --from=builder --chown=emailengineuser:emailenginegroup /emailengine/node_modules ./node_modules
+COPY --from=builder --chown=emailengineuser:emailenginegroup /emailengine/config ./config
+COPY --from=builder --chown=emailengineuser:emailenginegroup /emailengine/data ./data
+COPY --from=builder --chown=emailengineuser:emailenginegroup /emailengine/lib ./lib
+COPY --from=builder --chown=emailengineuser:emailenginegroup /emailengine/static ./static
+COPY --from=builder --chown=emailengineuser:emailenginegroup /emailengine/translations ./translations
+COPY --from=builder --chown=emailengineuser:emailenginegroup /emailengine/views ./views
+COPY --from=builder --chown=emailengineuser:emailenginegroup /emailengine/workers ./workers
+COPY --from=builder --chown=emailengineuser:emailenginegroup /emailengine/server.js ./server.js
+COPY --from=builder --chown=emailengineuser:emailenginegroup /emailengine/package.json ./package.json
+COPY --from=builder --chown=emailengineuser:emailenginegroup /emailengine/sbom.json ./sbom.json
+COPY --from=builder --chown=emailengineuser:emailenginegroup /emailengine/version-info.json ./version-info.json
+COPY --from=builder --chown=emailengineuser:emailenginegroup /emailengine/LICENSE_EMAILENGINE.txt ./LICENSE_EMAILENGINE.txt
+
 USER emailengineuser
 
-ENV EENGINE_HOST=0.0.0.0
-ENV EENGINE_API_PROXY=true
+ENV NODE_ENV=production \
+    EENGINE_HOST=0.0.0.0 \
+    EENGINE_API_PROXY=true
+
+EXPOSE 3000 2525 2993
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=45s --retries=3 \
+    CMD curl -sf http://localhost:3000/health || exit 1
 
 ENTRYPOINT ["/usr/bin/dumb-init", "--"]
 CMD ["node", "/emailengine/server.js"]
