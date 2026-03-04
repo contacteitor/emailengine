@@ -9,7 +9,7 @@ on:
 env:
   IMAGE: ghcr.io/contacteitor/emailengine
   MANIFESTS_REPO: contacteitor/clientify-manifiestos-kubernetes
-  K8S_CLUSTER: do-fra1-clientify-prod-k8s
+  K8S_CLUSTER: clientify-plus-k8s
   NAMESPACE: emailengine
 
 jobs:
