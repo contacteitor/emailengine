@@ -130,10 +130,7 @@ jobs:
       - name: Apply manifests
         timeout-minutes: 5
         run: |
-          kubectl apply -f manifests/emailengine/staging/secret.yaml
-          kubectl apply -f manifests/emailengine/staging/configmap.yaml
           kubectl apply -f manifests/emailengine/staging/deployment.yaml
-          kubectl apply -f manifests/emailengine/staging/hpa.yaml
 
       - name: Wait for rollout
         id: rollout
