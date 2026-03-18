@@ -1195,13 +1195,18 @@ let spawnWorker = async type => {
         // Handle worker exit
         worker.on('exit', exitCode => {
             if (!isOnline) {
-                let error = new Error(`Unable to start ${type} worker thread`);
+                if (isClosing) {
+                    // Shutdown llegó antes de que el worker terminara de inicializar — salida limpia
+                    resolve(threadId);
+                } else {
+                    let error = new Error(`Unable to start ${type} worker thread`);
 
-                error.workerType = type;
-                error.exitCode = exitCode;
-                error.threadId = threadId;
+                    error.workerType = type;
+                    error.exitCode = exitCode;
+                    error.threadId = threadId;
 
-                reject(error);
+                    reject(error);
+                }
             }
 
             exitHandler(exitCode).catch(err => {
