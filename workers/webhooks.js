@@ -144,6 +144,21 @@ parentPort.on('message', message => {
         }
     }
 
+    if (message && message.cmd === 'gracefulShutdown') {
+        console.log('[SHUTDOWN] Worker webhooks: cerrando notifyWorker (esperando job activo)');
+        notifyWorker
+            .close()
+            .then(() => {
+                console.log('[SHUTDOWN] Worker webhooks: notifyWorker cerrado');
+                process.exit(0);
+            })
+            .catch(err => {
+                console.log(`[SHUTDOWN] Worker webhooks: error cerrando notifyWorker: ${err.message}`);
+                process.exit(1);
+            });
+        return;
+    }
+
     if (message && message.cmd === 'call' && message.mid) {
         return onCommand(message.message)
             .then(response => {

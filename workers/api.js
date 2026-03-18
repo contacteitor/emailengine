@@ -484,6 +484,12 @@ parentPort.on('message', message => {
             });
     }
 
+    if (message && message.cmd === 'gracefulShutdown') {
+        console.log('[SHUTDOWN] Worker api: cerrando');
+        logger.flush(() => process.exit(0));
+        return;
+    }
+
     if (message && message.cmd === 'change') {
         publishChangeEvent(message);
     }

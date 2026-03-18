@@ -713,13 +713,18 @@ let spawnWorker = async type => {
 
         worker.on('exit', exitCode => {
             if (!isOnline) {
-                let error = new Error(`Failed to start ${type} worker thread on initialization`);
+                if (isClosing) {
+                    // Shutdown llegó antes de que el worker terminara de inicializar — salida limpia
+                    resolve(threadId);
+                } else {
+                    let error = new Error(`Failed to start ${type} worker thread on initialization`);
 
-                error.workerType = type;
-                error.exitCode = exitCode;
-                error.threadId = threadId;
+                    error.workerType = type;
+                    error.exitCode = exitCode;
+                    error.threadId = threadId;
 
-                reject(error);
+                    reject(error);
+                }
             }
 
             exitHandler(exitCode).catch(err => {
@@ -1977,66 +1982,97 @@ async function collectMetrics() {
     });
 }
 
-const closeQueues = cb => {
-    let proms = [];
-    if (queueEvents.notify) {
-        proms.push(queueEvents.notify.close());
+// Sin timeout artificial — se espera a que todos los workers terminen su job activo.
+// K8s garantiza el cierre final con terminationGracePeriodSeconds en el deployment.
+
+const gracefulShutdown = async signal => {
+    if (isClosing) {
+        return;
     }
+    isClosing = true;
 
-    if (queueEvents.submit) {
-        proms.push(queueEvents.submit.close());
-    }
+    const shutdownStart = Date.now();
+    const podName = process.env.HOSTNAME || os.hostname();
+    const timestamp = new Date().toISOString();
 
-    if (queueEvents.documents) {
-        proms.push(queueEvents.documents.close());
-    }
-
-    if (!proms.length) {
-        return setImmediate(() => cb());
-    }
-
-    let returned;
-
-    let closeTimeout = setTimeout(() => {
-        clearTimeout(closeTimeout);
-        if (returned) {
-            return;
+    // Recopilar todos los workers activos con su tipo antes de empezar
+    const activeWorkersList = [];
+    for (const [type, workerSet] of workers.entries()) {
+        for (const w of workerSet) {
+            activeWorkersList.push({ type, worker: w, threadId: w.threadId });
         }
-        returned = true;
-        cb();
-    }, 2500);
+    }
+    const workerCount = activeWorkersList.length;
+    const workerTypes = [...new Set(activeWorkersList.map(w => w.type))].join(', ');
 
-    Promise.allSettled(proms).then(() => {
-        clearTimeout(closeTimeout);
-        if (returned) {
-            return;
-        }
-        returned = true;
-        cb();
+    const SEP = '================================================================';
+    console.log(`\n${SEP}`);
+    console.log(` GRACEFUL SHUTDOWN INICIADO`);
+    console.log(SEP);
+    console.log(` Signal:              ${signal}`);
+    console.log(` Pod:                 ${podName}`);
+    console.log(` Timestamp:           ${timestamp}`);
+    console.log(` Workers al inicio:   ${workerCount} (${workerTypes})`);
+    console.log(`${SEP}\n`);
+
+    // Enviar señal de shutdown a cada WorkerThread
+    const workerExitPromises = activeWorkersList.map(({ type, worker, threadId }) => {
+        return new Promise(resolve => {
+            const workerStart = Date.now();
+
+            worker.once('exit', code => {
+                const elapsed = ((Date.now() - workerStart) / 1000).toFixed(1);
+                console.log(`[SHUTDOWN] Worker ${type} (threadId: ${threadId}) terminado (code: ${code}) - ${elapsed}s`);
+                resolve({ type, code });
+            });
+
+            try {
+                worker.postMessage({ cmd: 'gracefulShutdown' });
+                console.log(`[SHUTDOWN] Señal enviada a worker: ${type} (threadId: ${threadId})`);
+            } catch (err) {
+                console.log(`[SHUTDOWN] No se pudo enviar señal a worker ${type}: ${err.message}`);
+                resolve({ type, code: -1 });
+            }
+        });
     });
+
+    // Esperar a que TODOS los workers terminen su job activo antes de continuar.
+    await Promise.allSettled(workerExitPromises);
+
+    // Cerrar QueueEvents de BullMQ
+    const queueCloseProms = [];
+    if (queueEvents.notify) queueCloseProms.push(queueEvents.notify.close());
+    if (queueEvents.submit) queueCloseProms.push(queueEvents.submit.close());
+    if (queueEvents.documents) queueCloseProms.push(queueEvents.documents.close());
+    if (queueCloseProms.length) {
+        await Promise.allSettled(queueCloseProms);
+        console.log(`[SHUTDOWN] QueueEvents BullMQ cerrados`);
+    }
+
+    const totalElapsed = ((Date.now() - shutdownStart) / 1000).toFixed(1);
+    const finalWorkerCount = [...workers.values()].reduce((sum, set) => sum + set.size, 0);
+
+    console.log(`\n${SEP}`);
+    console.log(` SHUTDOWN COMPLETADO`);
+    console.log(SEP);
+    console.log(` Tiempo total:        ${totalElapsed}s`);
+    console.log(` Workers al inicio:   ${workerCount}`);
+    console.log(` Workers al final:    ${finalWorkerCount}`);
+    console.log(` Exit code:           0`);
+    console.log(`${SEP}\n`);
+
+    logger.flush(() => process.exit(0));
 };
 
-process.on('SIGTERM', () => {
-    logger.info({ msg: 'Close signal received', signal: 'SIGTERM', isClosing });
-    if (isClosing) {
-        return;
-    }
-    isClosing = true;
-    closeQueues(() => {
-        logger.flush(() => process.exit());
-    });
-});
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM').catch(err => {
+    logger.error({ msg: 'Error durante graceful shutdown', err });
+    process.exit(1);
+}));
 
-process.on('SIGINT', () => {
-    logger.info({ msg: 'Close signal received', signal: 'SIGINT', isClosing });
-    if (isClosing) {
-        return;
-    }
-    isClosing = true;
-    closeQueues(() => {
-        logger.flush(() => process.exit());
-    });
-});
+process.on('SIGINT', () => gracefulShutdown('SIGINT').catch(err => {
+    logger.error({ msg: 'Error durante graceful shutdown', err });
+    process.exit(1);
+}));
 
 // START APPLICATION
 

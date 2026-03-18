@@ -434,6 +434,21 @@ parentPort.on('message', message => {
         }
     }
 
+    if (message && message.cmd === 'gracefulShutdown') {
+        console.log('[SHUTDOWN] Worker submit: cerrando submitWorker (esperando job activo)');
+        submitWorker
+            .close()
+            .then(() => {
+                console.log('[SHUTDOWN] Worker submit: submitWorker cerrado');
+                process.exit(0);
+            })
+            .catch(err => {
+                console.log(`[SHUTDOWN] Worker submit: error cerrando submitWorker: ${err.message}`);
+                process.exit(1);
+            });
+        return;
+    }
+
     if (message && message.cmd === 'call' && message.mid) {
         return onCommand(message.message)
             .then(response => {

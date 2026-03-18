@@ -136,6 +136,21 @@ parentPort.on('message', message => {
         }
     }
 
+    if (message && message.cmd === 'gracefulShutdown') {
+        console.log('[SHUTDOWN] Worker documents: cerrando documentsWorker (esperando job activo)');
+        documentsWorker
+            .close()
+            .then(() => {
+                console.log('[SHUTDOWN] Worker documents: documentsWorker cerrado');
+                process.exit(0);
+            })
+            .catch(err => {
+                console.log(`[SHUTDOWN] Worker documents: error cerrando documentsWorker: ${err.message}`);
+                process.exit(1);
+            });
+        return;
+    }
+
     if (message && message.cmd === 'call' && message.mid) {
         return onCommand(message.message)
             .then(response => {
