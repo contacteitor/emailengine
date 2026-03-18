@@ -949,6 +949,21 @@ parentPort.on('message', message => {
         }
     }
 
+    if (message && message.cmd === 'gracefulShutdown') {
+        logger.info({ msg: '[SHUTDOWN] Worker imap: iniciando kill de conexiones IMAP' });
+        connectionHandler
+            .kill()
+            .then(() => {
+                logger.info({ msg: '[SHUTDOWN] Worker imap: conexiones IMAP cerradas' });
+                process.exit(0);
+            })
+            .catch(err => {
+                logger.error({ msg: '[SHUTDOWN] Worker imap: error en kill', err });
+                process.exit(1);
+            });
+        return;
+    }
+
     if (message && message.cmd === 'call' && message.mid) {
         return connectionHandler
             .onCommand(message.message)
