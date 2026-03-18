@@ -435,15 +435,15 @@ parentPort.on('message', message => {
     }
 
     if (message && message.cmd === 'gracefulShutdown') {
-        logger.info({ msg: '[SHUTDOWN] Worker submit: cerrando submitWorker (esperando job activo)' });
+        console.log('[SHUTDOWN] Worker submit: cerrando submitWorker (esperando job activo)');
         submitWorker
             .close()
             .then(() => {
-                logger.info({ msg: '[SHUTDOWN] Worker submit: submitWorker cerrado' });
+                console.log('[SHUTDOWN] Worker submit: submitWorker cerrado');
                 process.exit(0);
             })
             .catch(err => {
-                logger.error({ msg: '[SHUTDOWN] Worker submit: error cerrando submitWorker', err });
+                console.log(`[SHUTDOWN] Worker submit: error cerrando submitWorker: ${err.message}`);
                 process.exit(1);
             });
         return;
