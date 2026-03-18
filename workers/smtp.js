@@ -514,7 +514,7 @@ parentPort.on('message', message => {
     }
 
     if (message && message.cmd === 'gracefulShutdown') {
-        logger.info({ msg: '[SHUTDOWN] Worker smtp: cerrando' });
+        console.log('[SHUTDOWN] Worker smtp: cerrando');
         logger.flush(() => process.exit(0));
         return;
     }
