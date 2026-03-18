@@ -1977,66 +1977,95 @@ async function collectMetrics() {
     });
 }
 
-const closeQueues = cb => {
-    let proms = [];
-    if (queueEvents.notify) {
-        proms.push(queueEvents.notify.close());
+// Sin timeout artificial — se espera a que todos los workers terminen su job activo.
+// K8s garantiza el cierre final con terminationGracePeriodSeconds en el deployment.
+
+const gracefulShutdown = async signal => {
+    if (isClosing) {
+        return;
     }
+    isClosing = true;
 
-    if (queueEvents.submit) {
-        proms.push(queueEvents.submit.close());
-    }
+    const shutdownStart = Date.now();
+    const podName = process.env.HOSTNAME || os.hostname();
+    const timestamp = new Date().toISOString();
 
-    if (queueEvents.documents) {
-        proms.push(queueEvents.documents.close());
-    }
-
-    if (!proms.length) {
-        return setImmediate(() => cb());
-    }
-
-    let returned;
-
-    let closeTimeout = setTimeout(() => {
-        clearTimeout(closeTimeout);
-        if (returned) {
-            return;
+    // Recopilar todos los workers activos con su tipo antes de empezar
+    const activeWorkersList = [];
+    for (const [type, workerSet] of workers.entries()) {
+        for (const w of workerSet) {
+            activeWorkersList.push({ type, worker: w, threadId: w.threadId });
         }
-        returned = true;
-        cb();
-    }, 2500);
+    }
+    const workerCount = activeWorkersList.length;
+    const workerTypes = [...new Set(activeWorkersList.map(w => w.type))].join(', ');
 
-    Promise.allSettled(proms).then(() => {
-        clearTimeout(closeTimeout);
-        if (returned) {
-            return;
-        }
-        returned = true;
-        cb();
+    logger.info({
+        msg: '================================================================\n GRACEFUL SHUTDOWN INICIADO\n================================================================',
+        signal,
+        pod: podName,
+        timestamp,
+        workers: workerCount,
+        workerTypes
     });
+
+    // Enviar señal de shutdown a cada WorkerThread
+    const workerExitPromises = activeWorkersList.map(({ type, worker, threadId }) => {
+        return new Promise(resolve => {
+            const workerStart = Date.now();
+
+            worker.once('exit', code => {
+                const elapsed = ((Date.now() - workerStart) / 1000).toFixed(1);
+                logger.info({ msg: `[SHUTDOWN] Worker ${type} terminado (code: ${code}) - ${elapsed}s`, type, threadId, code, elapsed });
+                resolve({ type, code });
+            });
+
+            try {
+                worker.postMessage({ cmd: 'gracefulShutdown' });
+                logger.info({ msg: `[SHUTDOWN] Señal enviada a worker: ${type} (threadId: ${threadId})`, type, threadId });
+            } catch (err) {
+                logger.warn({ msg: `[SHUTDOWN] No se pudo enviar señal a worker ${type}`, type, threadId, err: err.message });
+                resolve({ type, code: -1 });
+            }
+        });
+    });
+
+    // Esperar a que TODOS los workers terminen su job activo antes de continuar.
+    await Promise.allSettled(workerExitPromises);
+
+    // Cerrar QueueEvents de BullMQ
+    const queueCloseProms = [];
+    if (queueEvents.notify) queueCloseProms.push(queueEvents.notify.close());
+    if (queueEvents.submit) queueCloseProms.push(queueEvents.submit.close());
+    if (queueEvents.documents) queueCloseProms.push(queueEvents.documents.close());
+    if (queueCloseProms.length) {
+        await Promise.allSettled(queueCloseProms);
+        logger.info({ msg: '[SHUTDOWN] QueueEvents cerrados' });
+    }
+
+    const totalElapsed = ((Date.now() - shutdownStart) / 1000).toFixed(1);
+    const finalWorkerCount = [...workers.values()].reduce((sum, set) => sum + set.size, 0);
+
+    logger.info({
+        msg: '================================================================\n SHUTDOWN COMPLETADO\n================================================================',
+        totalElapsed: `${totalElapsed}s`,
+        workersAlInicio: workerCount,
+        workersAlFinal: finalWorkerCount,
+        exitCode: 0
+    });
+
+    logger.flush(() => process.exit(0));
 };
 
-process.on('SIGTERM', () => {
-    logger.info({ msg: 'Close signal received', signal: 'SIGTERM', isClosing });
-    if (isClosing) {
-        return;
-    }
-    isClosing = true;
-    closeQueues(() => {
-        logger.flush(() => process.exit());
-    });
-});
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM').catch(err => {
+    logger.error({ msg: 'Error durante graceful shutdown', err });
+    process.exit(1);
+}));
 
-process.on('SIGINT', () => {
-    logger.info({ msg: 'Close signal received', signal: 'SIGINT', isClosing });
-    if (isClosing) {
-        return;
-    }
-    isClosing = true;
-    closeQueues(() => {
-        logger.flush(() => process.exit());
-    });
-});
+process.on('SIGINT', () => gracefulShutdown('SIGINT').catch(err => {
+    logger.error({ msg: 'Error durante graceful shutdown', err });
+    process.exit(1);
+}));
 
 // START APPLICATION
 

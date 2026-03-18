@@ -501,6 +501,12 @@ parentPort.on('message', message => {
         }
     }
 
+    if (message && message.cmd === 'gracefulShutdown') {
+        logger.info({ msg: '[SHUTDOWN] Worker smtp: cerrando' });
+        logger.flush(() => process.exit(0));
+        return;
+    }
+
     if (message && message.cmd === 'call' && message.mid) {
         return onCommand(message.message)
             .then(response => {
