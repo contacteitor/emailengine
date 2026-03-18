@@ -500,7 +500,7 @@ parentPort.on('message', message => {
     }
 
     if (message && message.cmd === 'gracefulShutdown') {
-        logger.info({ msg: '[SHUTDOWN] Worker api: cerrando' });
+        console.log('[SHUTDOWN] Worker api: cerrando');
         logger.flush(() => process.exit(0));
         return;
     }

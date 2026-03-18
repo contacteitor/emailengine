@@ -2807,14 +2807,15 @@ const gracefulShutdown = async signal => {
     const workerCount = activeWorkersList.length;
     const workerTypes = [...new Set(activeWorkersList.map(w => w.type))].join(', ');
 
-    logger.info({
-        msg: '================================================================\n GRACEFUL SHUTDOWN INICIADO\n================================================================',
-        signal,
-        pod: podName,
-        timestamp,
-        workers: workerCount,
-        workerTypes
-    });
+    const SEP = '================================================================';
+    console.log(`\n${SEP}`);
+    console.log(` GRACEFUL SHUTDOWN INICIADO`);
+    console.log(SEP);
+    console.log(` Signal:              ${signal}`);
+    console.log(` Pod:                 ${podName}`);
+    console.log(` Timestamp:           ${timestamp}`);
+    console.log(` Workers al inicio:   ${workerCount} (${workerTypes})`);
+    console.log(`${SEP}\n`);
 
     // Enviar señal de shutdown a cada WorkerThread
     const workerExitPromises = activeWorkersList.map(({ type, worker, threadId }) => {
@@ -2823,15 +2824,15 @@ const gracefulShutdown = async signal => {
 
             worker.once('exit', code => {
                 const elapsed = ((Date.now() - workerStart) / 1000).toFixed(1);
-                logger.info({ msg: `[SHUTDOWN] Worker ${type} terminado (code: ${code}) - ${elapsed}s`, type, threadId, code, elapsed });
+                console.log(`[SHUTDOWN] Worker ${type} (threadId: ${threadId}) terminado (code: ${code}) - ${elapsed}s`);
                 resolve({ type, code });
             });
 
             try {
                 worker.postMessage({ cmd: 'gracefulShutdown' });
-                logger.info({ msg: `[SHUTDOWN] Señal enviada a worker: ${type} (threadId: ${threadId})`, type, threadId });
+                console.log(`[SHUTDOWN] Señal enviada a worker: ${type} (threadId: ${threadId})`);
             } catch (err) {
-                logger.warn({ msg: `[SHUTDOWN] No se pudo enviar señal a worker ${type}`, type, threadId, err: err.message });
+                console.log(`[SHUTDOWN] No se pudo enviar señal a worker ${type}: ${err.message}`);
                 resolve({ type, code: -1 });
             }
         });
@@ -2847,19 +2848,20 @@ const gracefulShutdown = async signal => {
     if (queueEvents.documents) queueCloseProms.push(queueEvents.documents.close());
     if (queueCloseProms.length) {
         await Promise.allSettled(queueCloseProms);
-        logger.info({ msg: '[SHUTDOWN] QueueEvents cerrados' });
+        console.log(`[SHUTDOWN] QueueEvents BullMQ cerrados`);
     }
 
     const totalElapsed = ((Date.now() - shutdownStart) / 1000).toFixed(1);
     const finalWorkerCount = [...workers.values()].reduce((sum, set) => sum + set.size, 0);
 
-    logger.info({
-        msg: '================================================================\n SHUTDOWN COMPLETADO\n================================================================',
-        totalElapsed: `${totalElapsed}s`,
-        workersAlInicio: workerCount,
-        workersAlFinal: finalWorkerCount,
-        exitCode: 0
-    });
+    console.log(`\n${SEP}`);
+    console.log(` SHUTDOWN COMPLETADO`);
+    console.log(SEP);
+    console.log(` Tiempo total:        ${totalElapsed}s`);
+    console.log(` Workers al inicio:   ${workerCount}`);
+    console.log(` Workers al final:    ${finalWorkerCount}`);
+    console.log(` Exit code:           0`);
+    console.log(`${SEP}\n`);
 
     logger.flush(() => process.exit(0));
 };

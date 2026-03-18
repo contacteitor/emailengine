@@ -149,15 +149,15 @@ parentPort.on('message', message => {
     }
 
     if (message && message.cmd === 'gracefulShutdown') {
-        logger.info({ msg: '[SHUTDOWN] Worker documents: cerrando documentsWorker (esperando job activo)' });
+        console.log('[SHUTDOWN] Worker documents: cerrando documentsWorker (esperando job activo)');
         documentsWorker
             .close()
             .then(() => {
-                logger.info({ msg: '[SHUTDOWN] Worker documents: documentsWorker cerrado' });
+                console.log('[SHUTDOWN] Worker documents: documentsWorker cerrado');
                 process.exit(0);
             })
             .catch(err => {
-                logger.error({ msg: '[SHUTDOWN] Worker documents: error cerrando documentsWorker', err });
+                console.log(`[SHUTDOWN] Worker documents: error cerrando documentsWorker: ${err.message}`);
                 process.exit(1);
             });
         return;
