@@ -153,7 +153,7 @@
 
             <div class="form-group form-check">
 
-                <div class="text-muted float-right code-link">[<em>Web UI only</em>]</div>
+                <div class="text-muted float-right code-link">[EENGINE_REQUIRE_API_AUTH]</div>
 
                 <input type="checkbox" class="form-check-input {{#if errors.enableTokens}}is-invalid{{/if}}"
                     id="enableTokens" name="enableTokens" {{#if values.enableTokens}}checked{{/if}} />
@@ -166,7 +166,7 @@
                 <span class="invalid-feedback">{{errors.enableTokens}}</span>
                 {{/if}}
                 <small class="form-text text-muted">Disable for development only. Always enable in production for secure
-                    API access.</small>
+                    API access. Set <code>EENGINE_REQUIRE_API_AUTH=false</code> at startup to disable by default (not recommended).</small>
             </div>
 
             <div class="form-group form-check">
@@ -207,7 +207,7 @@
 
 
             <div class="form-group form-check">
-                <div class="text-muted float-right code-link">[<em>Web UI only</em>]</div>
+                <div class="text-muted float-right code-link">[EENGINE_ENABLE_OAUTH_TOKENS_API]</div>
                 <input type="checkbox" class="form-check-input {{#if errors.enableOAuthTokensApi}}is-invalid{{/if}}"
                     id="enableOAuthTokensApi" name="enableOAuthTokensApi" {{#if
                     values.enableOAuthTokensApi}}checked{{/if}} />
@@ -217,8 +217,9 @@
                 {{/if}}
                 <small class="form-text text-muted">Enable <a
                         href="/admin/swagger#/Account/getV1AccountAccountOauthtoken" target="_blank"
-                        rel="noopener noreferrer">API endpoint</a> to retrieve OAuth2 tokens. Use with caution-tokens
-                    grant full email access.</small>
+                        rel="noopener noreferrer">API endpoint</a> to retrieve OAuth2 tokens. Set
+                    <code>EENGINE_ENABLE_OAUTH_TOKENS_API=true</code> at startup to enable
+                    by default.</small>
             </div>
 
 
@@ -340,6 +341,41 @@
         </div>
     </div>
 
+    <div id="export_settings" class="card mb-4">
+        <div class="card-header py-3">
+            <h6 class="m-0 font-weight-bold text-primary">Export Settings</h6>
+        </div>
+        <div class="card-body">
+            <p>Configure batch sizes for bulk message export operations.</p>
+
+            <div class="form-group">
+                <div class="text-muted float-right code-link">[<a href="/admin/swagger#/Settings/postV1Settings"
+                        target="_blank" rel="noopener noreferrer">gmailExportBatchSize</a>]</div>
+                <label for="settingsGmailExportBatchSize">Gmail Export Batch Size</label>
+                <input type="number" min="1" max="50" class="form-control {{#if errors.gmailExportBatchSize}}is-invalid{{/if}}"
+                    id="settingsGmailExportBatchSize" name="gmailExportBatchSize" value="{{values.gmailExportBatchSize}}"
+                    data-lpignore="true" autocomplete="off" />
+                {{#if errors.gmailExportBatchSize}}
+                <span class="invalid-feedback">{{errors.gmailExportBatchSize}}</span>
+                {{/if}}
+                <small class="form-text text-muted">Number of parallel requests when fetching Gmail messages for export (1-50, default: 10).</small>
+            </div>
+
+            <div class="form-group">
+                <div class="text-muted float-right code-link">[<a href="/admin/swagger#/Settings/postV1Settings"
+                        target="_blank" rel="noopener noreferrer">outlookExportBatchSize</a>]</div>
+                <label for="settingsOutlookExportBatchSize">Outlook Export Batch Size</label>
+                <input type="number" min="1" max="20" class="form-control {{#if errors.outlookExportBatchSize}}is-invalid{{/if}}"
+                    id="settingsOutlookExportBatchSize" name="outlookExportBatchSize" value="{{values.outlookExportBatchSize}}"
+                    data-lpignore="true" autocomplete="off" />
+                {{#if errors.outlookExportBatchSize}}
+                <span class="invalid-feedback">{{errors.outlookExportBatchSize}}</span>
+                {{/if}}
+                <small class="form-text text-muted">Messages per batch request for Outlook exports (1-20, default: 20). Limited by Microsoft Graph API.</small>
+            </div>
+        </div>
+    </div>
+
     <div id="templates_settings" class="card mb-4">
         <div class="card-header py-3 d-flex flex-row align-items-center justify-content-between">
             <h6 class="m-0 font-weight-bold text-primary">Public Page Customization</h6>
@@ -444,12 +480,12 @@
 
             <p>Global settings for filter and map functions in <a href="/admin/webhooks">webhook routes</a>.</p>
 
-            <div class="form-group">
+            <div class="form-group" id="scriptEnv">
 
                 <div class="text-muted float-right code-link">[<a href="/admin/swagger#/Settings/postV1Settings"
                         target="_blank" rel="noopener noreferrer">scriptEnv</a>]</div>
 
-                <label>Environment Variables (JSON)</label>
+                <label>Script Variables (JSON)</label>
 
                 <input type="hidden" class="{{#if errors.scriptEnv}}is-invalid{{/if}}" id="scriptEnvElement"
                     name="scriptEnv" value="{{values.scriptEnv}}">
@@ -468,8 +504,7 @@
                 <span class="invalid-feedback">{{errors.scriptEnv}}</span>
                 {{/if}}
 
-                <small class="form-text text-muted">JSON object available as <code>env</code> variable in all webhook
-                    scripts.</small>
+                <small class="form-text text-muted">JSON object available as <code>env</code> variable in all filter and map functions. Use for shared secrets like API keys, access tokens, or configuration values. For example, if set to <code>{"token":"secret123"}</code>, then <code>env.token</code> in your scripts returns <code>"secret123"</code>.</small>
             </div>
 
         </div>

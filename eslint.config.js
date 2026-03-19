@@ -27,6 +27,8 @@ module.exports = [
                 clearTimeout: 'readonly',
                 setInterval: 'readonly',
                 clearInterval: 'readonly',
+                AbortController: 'readonly',
+                AbortSignal: 'readonly',
                 URL: 'readonly',
                 URLSearchParams: 'readonly',
                 structuredClone: 'readonly',
