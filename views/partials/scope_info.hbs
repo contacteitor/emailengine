@@ -1,7 +1,7 @@
 {{#if activeGmail}}
 <div>Your <a href="https://console.cloud.google.com/auth/scopes?project={{app.googleProjectId}}">OAuth2 project</a>
     <strong>must</strong> have the following scopes enabled{{#if disabledScopes.Gmail_Modify}} and
-    also listed in the <em>Custom OAuth2 scopes</em> section{{/if}}:</div>
+    listed in the <em>Custom OAuth2 scopes</em> section{{/if}}:</div>
 <ul>
 
     {{#if baseScopesImap}}
@@ -13,8 +13,12 @@
     {{#unless disabledScopes.Gmail_Modify}}
     <li><code>"https://www.googleapis.com/auth/gmail.modify"</code></li>
     {{else}}
+    {{#if isSendOnlyGmail}}
+    <li><code>"https://www.googleapis.com/auth/gmail.send"</code></li>
+    {{else}}
     <li><code>"https://www.googleapis.com/auth/gmail.readonly"</code></li>
     <li><code>"https://www.googleapis.com/auth/gmail.labels"</code></li>
+    {{/if}}
     {{/unless}}
 
     {{/if}}
@@ -24,6 +28,15 @@
     {{/if}}
 
 </ul>
+
+{{#if isSendOnlyGmail}}
+<div class="alert alert-warning mt-3">
+    <strong>Send-only account limitation:</strong> Messages sent through this app cannot be tracked by EmailEngine.
+    The Gmail API modifies the Message-ID header when sending emails, and without read permissions,
+    EmailEngine cannot resolve the new Message-ID assigned by Gmail. Delivery status and bounce
+    notifications may not be accurately associated with the sent message.
+</div>
+{{/if}}
 
 <div>Read about setting up the OAuth2 project in Google Cloud from
 
@@ -113,7 +126,7 @@
     <li><code>"mail.imap"</code>
 </ul>
 
-<div class="alert alert-info"><strong>NB!</strong> The required "mail.imap" scope might not be available
+<div class="alert alert-info"><strong>Note:</strong> The required "mail.imap" scope might not be available
     for your <a href="https://oauth.mail.ru/app/" target="_blank" rel="noopener noreferrer"
         referrerpolicy="no-referrer">OAuth2
         apps</a> by

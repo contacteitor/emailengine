@@ -46,13 +46,13 @@ const {
     MESSAGE_NEW_NOTIFY,
     MESSAGE_DELETED_NOTIFY,
     MESSAGE_UPDATED_NOTIFY,
-    ACCOUNT_DELETED,
+    ACCOUNT_DELETED_NOTIFY,
     EMAIL_BOUNCE_NOTIFY,
     MAILBOX_DELETED_NOTIFY,
     REDIS_PREFIX
 } = require('../lib/consts');
 
-const config = require('wild-config');
+const config = require('@zone-eu/wild-config');
 config.service = config.service || {};
 
 const DEFAULT_EENGINE_TIMEOUT = 10 * 1000;
@@ -72,6 +72,7 @@ async function call(message, transferList) {
             err.statusCode = 504;
             err.code = 'Timeout';
             err.ttl = ttl;
+            callQueue.delete(mid);
             reject(err);
         }, ttl);
 
@@ -116,6 +117,18 @@ async function onCommand(command) {
             return 999;
     }
 }
+
+// Start sending heartbeats to main thread
+setInterval(() => {
+    try {
+        parentPort.postMessage({ cmd: 'heartbeat' });
+    } catch (err) {
+        // Ignore errors, parent might be shutting down
+    }
+}, 10 * 1000).unref();
+
+// Send initial ready signal
+parentPort.postMessage({ cmd: 'ready' });
 
 parentPort.on('message', message => {
     if (message && message.cmd === 'resp' && message.mid && callQueue.has(message.mid)) {
@@ -181,7 +194,7 @@ const documentsWorker = new Worker(
         const tombstoneYdy = `${REDIS_PREFIX}tomb:${job.data.account}:${dateKeyYdy}`;
 
         switch (job.data.event) {
-            case ACCOUNT_DELETED:
+            case ACCOUNT_DELETED_NOTIFY:
                 {
                     const { index, client } = await getESClient(logger);
                     if (!client) {
@@ -244,7 +257,7 @@ const documentsWorker = new Worker(
                         return;
                     }
 
-                    let deleteResult = null;
+                    let deleteResult;
 
                     let filterQuery = {
                         bool: {
@@ -615,7 +628,7 @@ const documentsWorker = new Worker(
                         return;
                     }
 
-                    let deleteResult = null;
+                    let deleteResult;
 
                     try {
                         let messageIdHeader;
@@ -915,6 +928,7 @@ if( ctx._source.bounces != null) {
     Object.assign(
         {
             concurrency: 1,
+            lockDuration: 2 * 60 * 1000, // 2 minutes for ES operations
             maxStalledCount: 5,
             stalledInterval: 60 * 1000
         },

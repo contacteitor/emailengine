@@ -2,12 +2,12 @@
 const { parentPort } = require('worker_threads');
 
 const packageData = require('../package.json');
-const config = require('wild-config');
+const config = require('@zone-eu/wild-config');
 const logger = require('../lib/logger');
 
 const { REDIS_PREFIX } = require('../lib/consts');
 
-const { getDuration, getBoolean, emitChangeEvent, readEnvValue, hasEnvValue, threadStats } = require('../lib/tools');
+const { getDuration, getBoolean, emitChangeEvent, readEnvValue, hasEnvValue, threadStats, reloadHttpProxyAgent } = require('../lib/tools');
 
 const Bugsnag = require('@bugsnag/js');
 if (readEnvValue('BUGSNAG_API_KEY')) {
@@ -68,11 +68,9 @@ const DEFAULT_STATES = {
     disconnected: 0
 };
 
-const NO_ACTIVE_HANDLER_RESP = {
-    error: 'No active handler for requested account. Try again later.',
-    statusCode: 503,
-    code: 'WorkerNotAvailable'
-};
+const NO_ACTIVE_HANDLER_RESP_ERR = new Error('No active handler for requested account. Try again later.');
+NO_ACTIVE_HANDLER_RESP_ERR.statusCode = 503;
+NO_ACTIVE_HANDLER_RESP_ERR.code = 'WorkerNotAvailable';
 
 class ConnectionHandler {
     constructor() {
@@ -83,8 +81,49 @@ class ConnectionHandler {
     }
 
     async init() {
+        // Track Redis connection state for reconnection detection
+        let hasSeenStableConnection = false;
+        let redisWasDisconnected = false;
+
+        // Check initial Redis state
+        if (redis.status === 'ready') {
+            hasSeenStableConnection = true;
+        }
+
+        redis.on('ready', () => {
+            if (redisWasDisconnected && hasSeenStableConnection) {
+                // Redis reconnected after being disconnected during our lifetime
+                logger.info({ msg: 'Redis reconnected after disconnection, exiting worker for clean restart', worker: 'imap' });
+                // Exit gracefully - the main process will restart this worker
+                process.exit(0);
+            }
+            // Mark that we've seen a stable connection
+            hasSeenStableConnection = true;
+        });
+
+        redis.on('end', () => {
+            if (hasSeenStableConnection) {
+                logger.warn({ msg: 'Redis connection lost', worker: 'imap' });
+                redisWasDisconnected = true;
+            }
+        });
+
         // indicate that we are ready to process connections
         parentPort.postMessage({ cmd: 'ready' });
+
+        // Start sending heartbeats to main thread
+        this.startHeartbeat();
+    }
+
+    startHeartbeat() {
+        // Send heartbeat every 10 seconds
+        setInterval(() => {
+            try {
+                parentPort.postMessage({ cmd: 'heartbeat' });
+            } catch (err) {
+                // Ignore errors, parent might be shutting down
+            }
+        }, 10 * 1000).unref();
     }
 
     getLogKey(account) {
@@ -170,7 +209,7 @@ class ConnectionHandler {
                 oauth2App = await oauth2Apps.get(accountData.oauth2.provider);
             }
 
-            if (oauth2App.baseScopes === 'api') {
+            if (oauth2App && oauth2App.baseScopes === 'api') {
                 // Use API instead of IMAP
 
                 switch (oauth2App.provider) {
@@ -359,12 +398,12 @@ class ConnectionHandler {
 
     async listMessages(message) {
         if (!this.accounts.has(message.account)) {
-            return NO_ACTIVE_HANDLER_RESP;
+            throw NO_ACTIVE_HANDLER_RESP_ERR;
         }
 
         let accountData = this.accounts.get(message.account);
         if (!accountData.connection) {
-            return NO_ACTIVE_HANDLER_RESP;
+            throw NO_ACTIVE_HANDLER_RESP_ERR;
         }
 
         return await accountData.connection.listMessages(message);
@@ -372,12 +411,12 @@ class ConnectionHandler {
 
     async listSignatures(message) {
         if (!this.accounts.has(message.account)) {
-            return NO_ACTIVE_HANDLER_RESP;
+            throw NO_ACTIVE_HANDLER_RESP_ERR;
         }
 
         let accountData = this.accounts.get(message.account);
         if (!accountData.connection) {
-            return NO_ACTIVE_HANDLER_RESP;
+            throw NO_ACTIVE_HANDLER_RESP_ERR;
         }
 
         return await accountData.connection.listSignatures(message.account);
@@ -385,12 +424,12 @@ class ConnectionHandler {
 
     async getText(message) {
         if (!this.accounts.has(message.account)) {
-            return NO_ACTIVE_HANDLER_RESP;
+            throw NO_ACTIVE_HANDLER_RESP_ERR;
         }
 
         let accountData = this.accounts.get(message.account);
         if (!accountData.connection) {
-            return NO_ACTIVE_HANDLER_RESP;
+            throw NO_ACTIVE_HANDLER_RESP_ERR;
         }
 
         return await accountData.connection.getText(message.text, message.options);
@@ -398,25 +437,53 @@ class ConnectionHandler {
 
     async getMessage(message) {
         if (!this.accounts.has(message.account)) {
-            return NO_ACTIVE_HANDLER_RESP;
+            throw NO_ACTIVE_HANDLER_RESP_ERR;
         }
 
         let accountData = this.accounts.get(message.account);
         if (!accountData.connection) {
-            return NO_ACTIVE_HANDLER_RESP;
+            throw NO_ACTIVE_HANDLER_RESP_ERR;
         }
 
         return await accountData.connection.getMessage(message.message, message.options);
     }
 
-    async updateMessage(message) {
+    async getMessages(message) {
         if (!this.accounts.has(message.account)) {
-            return NO_ACTIVE_HANDLER_RESP;
+            throw NO_ACTIVE_HANDLER_RESP_ERR;
         }
 
         let accountData = this.accounts.get(message.account);
         if (!accountData.connection) {
-            return NO_ACTIVE_HANDLER_RESP;
+            throw NO_ACTIVE_HANDLER_RESP_ERR;
+        }
+
+        // Use batch method if available (Gmail/Outlook API clients)
+        if (typeof accountData.connection.getMessages === 'function') {
+            return await accountData.connection.getMessages(message.messageIds, message.options);
+        }
+
+        // Fallback to sequential fetching for IMAP
+        const results = [];
+        for (const messageId of message.messageIds) {
+            try {
+                const msg = await accountData.connection.getMessage(messageId, message.options);
+                results.push({ messageId, data: msg, error: null });
+            } catch (err) {
+                results.push({ messageId, data: null, error: { message: err.message, code: err.code } });
+            }
+        }
+        return results;
+    }
+
+    async updateMessage(message) {
+        if (!this.accounts.has(message.account)) {
+            throw NO_ACTIVE_HANDLER_RESP_ERR;
+        }
+
+        let accountData = this.accounts.get(message.account);
+        if (!accountData.connection) {
+            throw NO_ACTIVE_HANDLER_RESP_ERR;
         }
 
         return await accountData.connection.updateMessage(message.message, message.updates);
@@ -424,24 +491,24 @@ class ConnectionHandler {
 
     async updateMessages(message) {
         if (!this.accounts.has(message.account)) {
-            return NO_ACTIVE_HANDLER_RESP;
+            throw NO_ACTIVE_HANDLER_RESP_ERR;
         }
 
         let accountData = this.accounts.get(message.account);
         if (!accountData.connection) {
-            return NO_ACTIVE_HANDLER_RESP;
+            throw NO_ACTIVE_HANDLER_RESP_ERR;
         }
         return await accountData.connection.updateMessages(message.path, message.search, message.updates);
     }
 
     async listMailboxes(message) {
         if (!this.accounts.has(message.account)) {
-            return NO_ACTIVE_HANDLER_RESP;
+            throw NO_ACTIVE_HANDLER_RESP_ERR;
         }
 
         let accountData = this.accounts.get(message.account);
         if (!accountData.connection) {
-            return NO_ACTIVE_HANDLER_RESP;
+            throw NO_ACTIVE_HANDLER_RESP_ERR;
         }
 
         return await accountData.connection.listMailboxes(message.options);
@@ -449,12 +516,12 @@ class ConnectionHandler {
 
     async moveMessage(message) {
         if (!this.accounts.has(message.account)) {
-            return NO_ACTIVE_HANDLER_RESP;
+            throw NO_ACTIVE_HANDLER_RESP_ERR;
         }
 
         let accountData = this.accounts.get(message.account);
         if (!accountData.connection) {
-            return NO_ACTIVE_HANDLER_RESP;
+            throw NO_ACTIVE_HANDLER_RESP_ERR;
         }
 
         return await accountData.connection.moveMessage(message.message, message.target, message.options);
@@ -462,12 +529,12 @@ class ConnectionHandler {
 
     async moveMessages(message) {
         if (!this.accounts.has(message.account)) {
-            return NO_ACTIVE_HANDLER_RESP;
+            throw NO_ACTIVE_HANDLER_RESP_ERR;
         }
 
         let accountData = this.accounts.get(message.account);
         if (!accountData.connection) {
-            return NO_ACTIVE_HANDLER_RESP;
+            throw NO_ACTIVE_HANDLER_RESP_ERR;
         }
 
         return await accountData.connection.moveMessages(message.source, message.search, message.target);
@@ -475,12 +542,12 @@ class ConnectionHandler {
 
     async deleteMessage(message) {
         if (!this.accounts.has(message.account)) {
-            return NO_ACTIVE_HANDLER_RESP;
+            throw NO_ACTIVE_HANDLER_RESP_ERR;
         }
 
         let accountData = this.accounts.get(message.account);
         if (!accountData.connection) {
-            return NO_ACTIVE_HANDLER_RESP;
+            throw NO_ACTIVE_HANDLER_RESP_ERR;
         }
 
         return await accountData.connection.deleteMessage(message.message, message.force);
@@ -488,12 +555,12 @@ class ConnectionHandler {
 
     async deleteMessages(message) {
         if (!this.accounts.has(message.account)) {
-            return NO_ACTIVE_HANDLER_RESP;
+            throw NO_ACTIVE_HANDLER_RESP_ERR;
         }
 
         let accountData = this.accounts.get(message.account);
         if (!accountData.connection) {
-            return NO_ACTIVE_HANDLER_RESP;
+            throw NO_ACTIVE_HANDLER_RESP_ERR;
         }
 
         return await accountData.connection.deleteMessages(message.path, message.search, message.force);
@@ -501,12 +568,12 @@ class ConnectionHandler {
 
     async submitMessage(message) {
         if (!this.accounts.has(message.account)) {
-            return NO_ACTIVE_HANDLER_RESP;
+            throw NO_ACTIVE_HANDLER_RESP_ERR;
         }
 
         let accountData = this.accounts.get(message.account);
         if (!accountData.connection) {
-            return NO_ACTIVE_HANDLER_RESP;
+            throw NO_ACTIVE_HANDLER_RESP_ERR;
         }
 
         return await accountData.connection.submitMessage(message.data);
@@ -514,12 +581,12 @@ class ConnectionHandler {
 
     async queueMessage(message) {
         if (!this.accounts.has(message.account)) {
-            return NO_ACTIVE_HANDLER_RESP;
+            throw NO_ACTIVE_HANDLER_RESP_ERR;
         }
 
         const accountData = this.accounts.get(message.account);
         if (!accountData.connection) {
-            return NO_ACTIVE_HANDLER_RESP;
+            throw NO_ACTIVE_HANDLER_RESP_ERR;
         }
 
         return await accountData.connection.queueMessage(message.data, message.meta);
@@ -544,12 +611,12 @@ class ConnectionHandler {
 
     async uploadMessage(message) {
         if (!this.accounts.has(message.account)) {
-            return NO_ACTIVE_HANDLER_RESP;
+            throw NO_ACTIVE_HANDLER_RESP_ERR;
         }
 
         let accountData = this.accounts.get(message.account);
         if (!accountData.connection) {
-            return NO_ACTIVE_HANDLER_RESP;
+            throw NO_ACTIVE_HANDLER_RESP_ERR;
         }
 
         return await accountData.connection.uploadMessage(message.data);
@@ -557,25 +624,53 @@ class ConnectionHandler {
 
     async externalNotify(message) {
         if (!this.accounts.has(message.account)) {
-            return NO_ACTIVE_HANDLER_RESP;
+            throw NO_ACTIVE_HANDLER_RESP_ERR;
         }
 
         let accountData = this.accounts.get(message.account);
         if (!accountData.connection) {
-            return NO_ACTIVE_HANDLER_RESP;
+            throw NO_ACTIVE_HANDLER_RESP_ERR;
         }
 
         return await accountData.connection.externalNotify(message);
     }
 
-    async getQuota(message) {
+    async subscriptionLifecycle(message) {
         if (!this.accounts.has(message.account)) {
-            return NO_ACTIVE_HANDLER_RESP;
+            throw NO_ACTIVE_HANDLER_RESP_ERR;
         }
 
         let accountData = this.accounts.get(message.account);
         if (!accountData.connection) {
-            return NO_ACTIVE_HANDLER_RESP;
+            throw NO_ACTIVE_HANDLER_RESP_ERR;
+        }
+
+        let connection = accountData.connection;
+
+        switch (message.event) {
+            case 'reauthorizationRequired':
+                return await connection.renewSubscription({ force: true });
+
+            case 'subscriptionRemoved':
+                // Clear stored subscription since MS deleted it server-side, under lock
+                logger.info({ msg: 'Handling subscriptionRemoved lifecycle event', account: message.account });
+                await connection.ensureSubscription({ clearExisting: true });
+                return true;
+
+            default:
+                logger.warn({ msg: 'Unknown subscription lifecycle event', event: message.event, account: message.account });
+                return false;
+        }
+    }
+
+    async getQuota(message) {
+        if (!this.accounts.has(message.account)) {
+            throw NO_ACTIVE_HANDLER_RESP_ERR;
+        }
+
+        let accountData = this.accounts.get(message.account);
+        if (!accountData.connection) {
+            throw NO_ACTIVE_HANDLER_RESP_ERR;
         }
 
         return await accountData.connection.getQuota();
@@ -583,50 +678,50 @@ class ConnectionHandler {
 
     async createMailbox(message) {
         if (!this.accounts.has(message.account)) {
-            return NO_ACTIVE_HANDLER_RESP;
+            throw NO_ACTIVE_HANDLER_RESP_ERR;
         }
 
         let accountData = this.accounts.get(message.account);
         if (!accountData.connection) {
-            return NO_ACTIVE_HANDLER_RESP;
+            throw NO_ACTIVE_HANDLER_RESP_ERR;
         }
 
         return await accountData.connection.createMailbox(message.path);
     }
 
-    async renameMailbox(message) {
+    async modifyMailbox(message) {
         if (!this.accounts.has(message.account)) {
-            return NO_ACTIVE_HANDLER_RESP;
+            throw NO_ACTIVE_HANDLER_RESP_ERR;
         }
 
         let accountData = this.accounts.get(message.account);
         if (!accountData.connection) {
-            return NO_ACTIVE_HANDLER_RESP;
+            throw NO_ACTIVE_HANDLER_RESP_ERR;
         }
 
-        return await accountData.connection.renameMailbox(message.path, message.newPath);
+        return await accountData.connection.modifyMailbox(message.path, message.newPath, message.subscribed);
     }
 
     async deleteMailbox(message) {
         if (!this.accounts.has(message.account)) {
-            return NO_ACTIVE_HANDLER_RESP;
+            throw NO_ACTIVE_HANDLER_RESP_ERR;
         }
 
         let accountData = this.accounts.get(message.account);
         if (!accountData.connection) {
-            return NO_ACTIVE_HANDLER_RESP;
+            throw NO_ACTIVE_HANDLER_RESP_ERR;
         }
         return await accountData.connection.deleteMailbox(message.path);
     }
 
     async getRawMessage(message) {
         if (!this.accounts.has(message.account)) {
-            return NO_ACTIVE_HANDLER_RESP;
+            throw NO_ACTIVE_HANDLER_RESP_ERR;
         }
 
         let accountData = this.accounts.get(message.account);
         if (!accountData.connection) {
-            return NO_ACTIVE_HANDLER_RESP;
+            throw NO_ACTIVE_HANDLER_RESP_ERR;
         }
         let stream = new MessagePortWritable(message.port);
 
@@ -656,12 +751,12 @@ class ConnectionHandler {
 
     async getAttachment(message) {
         if (!this.accounts.has(message.account)) {
-            return NO_ACTIVE_HANDLER_RESP;
+            throw NO_ACTIVE_HANDLER_RESP_ERR;
         }
 
         let accountData = this.accounts.get(message.account);
         if (!accountData.connection) {
-            return NO_ACTIVE_HANDLER_RESP;
+            throw NO_ACTIVE_HANDLER_RESP_ERR;
         }
 
         let stream = new MessagePortWritable(message.port);
@@ -712,6 +807,10 @@ class ConnectionHandler {
 
         switch (message.cmd) {
             case 'settings':
+                if (message.data && ('httpProxyEnabled' in message.data || 'httpProxyUrl' in message.data)) {
+                    reloadHttpProxyAgent().catch(err => logger.error({ msg: 'Failed to reload HTTP proxy agent', err }));
+                }
+
                 if (message.data && message.data.logs) {
                     for (let [account, accountObject] of this.accounts) {
                         // update log handling
@@ -755,6 +854,7 @@ class ConnectionHandler {
             case 'listMessages':
             case 'getText':
             case 'getMessage':
+            case 'getMessages':
             case 'updateMessage':
             case 'updateMessages':
             case 'listMailboxes':
@@ -765,7 +865,7 @@ class ConnectionHandler {
             case 'getRawMessage':
             case 'getQuota':
             case 'createMailbox':
-            case 'renameMailbox':
+            case 'modifyMailbox':
             case 'deleteMailbox':
             case 'getAttachment':
             case 'submitMessage':
@@ -773,11 +873,13 @@ class ConnectionHandler {
             case 'uploadMessage':
             case 'subconnections':
             case 'externalNotify':
+            case 'subscriptionLifecycle':
             case 'listSignatures':
                 return await this[message.cmd](message);
 
             case 'countConnections': {
                 let results = Object.assign({}, DEFAULT_STATES);
+                let subscriptions = { valid: 0, expired: 0, unset: 0, failed: 0, pending: 0 };
 
                 for (let accountObject of this.accounts.values()) {
                     let state;
@@ -786,6 +888,14 @@ class ConnectionHandler {
                         state = 'unassigned';
                     } else {
                         state = await accountObject.connection.currentState();
+
+                        // Collect MS Graph subscription states for Outlook accounts
+                        if (accountObject.connection instanceof OutlookClient) {
+                            let subState = accountObject.connection.subscriptionState || 'unset';
+                            if (subscriptions[subState] !== undefined) {
+                                subscriptions[subState]++;
+                            }
+                        }
                     }
 
                     if (!results[state]) {
@@ -794,7 +904,7 @@ class ConnectionHandler {
                     results[state] += 1;
                 }
 
-                return results;
+                return { connections: results, subscriptions };
             }
 
             default:
@@ -812,6 +922,7 @@ class ConnectionHandler {
                 err.statusCode = 504;
                 err.code = 'Timeout';
                 err.ttl = ttl;
+                this.callQueue.delete(mid);
                 reject(err);
             }, ttl);
 
