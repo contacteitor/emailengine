@@ -3,10 +3,11 @@
 const { parentPort } = require('worker_threads');
 
 const packageData = require('../package.json');
-const config = require('wild-config');
+const config = require('@zone-eu/wild-config');
 const logger = require('../lib/logger');
 
-const { getDuration, emitChangeEvent, readEnvValue, matchIp, threadStats, loadTlsConfig } = require('../lib/tools');
+const { getDuration, emitChangeEvent, readEnvValue, threadStats, loadTlsConfig, getByteSize } = require('../lib/tools');
+const { matchIp } = require('../lib/utils/network');
 
 const Bugsnag = require('@bugsnag/js');
 if (readEnvValue('BUGSNAG_API_KEY')) {
@@ -36,7 +37,7 @@ const util = require('util');
 const { redis } = require('../lib/db');
 const { Account } = require('../lib/account');
 const getSecret = require('../lib/get-secret');
-const { Splitter, Joiner } = require('mailsplit');
+const { Splitter, Joiner } = require('@zone-eu/mailsplit');
 const { HeadersRewriter } = require('../lib/headers-rewriter');
 const settings = require('../lib/settings');
 const tokens = require('../lib/tokens');
@@ -54,12 +55,12 @@ config.smtp = config.smtp || {
 
 config.service = config.service || {};
 
-const MAX_SIZE = 20 * 1024 * 1024;
+const { REDIS_PREFIX, DEFAULT_MAX_SMTP_MESSAGE_SIZE } = require('../lib/consts');
+
 const DEFAULT_EENGINE_TIMEOUT = 10 * 1000;
 
+const MAX_SMTP_MESSAGE_SIZE = getByteSize(readEnvValue('EENGINE_MAX_SMTP_MESSAGE_SIZE') || config.smtp.maxMessageSize) || DEFAULT_MAX_SMTP_MESSAGE_SIZE;
 const EENGINE_TIMEOUT = getDuration(readEnvValue('EENGINE_TIMEOUT') || config.service.commandTimeout) || DEFAULT_EENGINE_TIMEOUT;
-
-const { REDIS_PREFIX } = require('../lib/consts');
 
 const ACCOUNT_CACHE = new WeakMap();
 
@@ -76,6 +77,7 @@ async function call(message, transferList) {
             err.statusCode = 504;
             err.code = 'Timeout';
             err.ttl = ttl;
+            callQueue.delete(mid);
             reject(err);
         }, ttl);
 
@@ -281,7 +283,7 @@ async function init() {
         logger: smtpLogger,
         disableReverseLookup: true,
         banner: 'EmailEngine MSA',
-        size: MAX_SIZE,
+        size: MAX_SMTP_MESSAGE_SIZE,
         useProxy: await settings.get('smtpServerProxy')
     };
 

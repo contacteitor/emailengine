@@ -2,12 +2,12 @@
 const { parentPort } = require('worker_threads');
 
 const packageData = require('../package.json');
-const config = require('wild-config');
+const config = require('@zone-eu/wild-config');
 const logger = require('../lib/logger');
 
 const { REDIS_PREFIX } = require('../lib/consts');
 
-const { getDuration, getBoolean, emitChangeEvent, readEnvValue, hasEnvValue, threadStats } = require('../lib/tools');
+const { getDuration, getBoolean, emitChangeEvent, readEnvValue, hasEnvValue, threadStats, reloadHttpProxyAgent } = require('../lib/tools');
 
 const Bugsnag = require('@bugsnag/js');
 if (readEnvValue('BUGSNAG_API_KEY')) {
@@ -78,10 +78,6 @@ class ConnectionHandler {
         this.mids = 0;
 
         this.accounts = new Map();
-
-        // Reconnection metrics tracking
-        this.reconnectMetrics = new Map(); // Track metrics per account
-        this.metricsWindow = 60000; // 1-minute window
     }
 
     async init() {
@@ -452,6 +448,34 @@ class ConnectionHandler {
         return await accountData.connection.getMessage(message.message, message.options);
     }
 
+    async getMessages(message) {
+        if (!this.accounts.has(message.account)) {
+            throw NO_ACTIVE_HANDLER_RESP_ERR;
+        }
+
+        let accountData = this.accounts.get(message.account);
+        if (!accountData.connection) {
+            throw NO_ACTIVE_HANDLER_RESP_ERR;
+        }
+
+        // Use batch method if available (Gmail/Outlook API clients)
+        if (typeof accountData.connection.getMessages === 'function') {
+            return await accountData.connection.getMessages(message.messageIds, message.options);
+        }
+
+        // Fallback to sequential fetching for IMAP
+        const results = [];
+        for (const messageId of message.messageIds) {
+            try {
+                const msg = await accountData.connection.getMessage(messageId, message.options);
+                results.push({ messageId, data: msg, error: null });
+            } catch (err) {
+                results.push({ messageId, data: null, error: { message: err.message, code: err.code } });
+            }
+        }
+        return results;
+    }
+
     async updateMessage(message) {
         if (!this.accounts.has(message.account)) {
             throw NO_ACTIVE_HANDLER_RESP_ERR;
@@ -611,6 +635,34 @@ class ConnectionHandler {
         return await accountData.connection.externalNotify(message);
     }
 
+    async subscriptionLifecycle(message) {
+        if (!this.accounts.has(message.account)) {
+            throw NO_ACTIVE_HANDLER_RESP_ERR;
+        }
+
+        let accountData = this.accounts.get(message.account);
+        if (!accountData.connection) {
+            throw NO_ACTIVE_HANDLER_RESP_ERR;
+        }
+
+        let connection = accountData.connection;
+
+        switch (message.event) {
+            case 'reauthorizationRequired':
+                return await connection.renewSubscription({ force: true });
+
+            case 'subscriptionRemoved':
+                // Clear stored subscription since MS deleted it server-side, under lock
+                logger.info({ msg: 'Handling subscriptionRemoved lifecycle event', account: message.account });
+                await connection.ensureSubscription({ clearExisting: true });
+                return true;
+
+            default:
+                logger.warn({ msg: 'Unknown subscription lifecycle event', event: message.event, account: message.account });
+                return false;
+        }
+    }
+
     async getQuota(message) {
         if (!this.accounts.has(message.account)) {
             throw NO_ACTIVE_HANDLER_RESP_ERR;
@@ -697,49 +749,6 @@ class ConnectionHandler {
         };
     }
 
-    /**
-     * Track reconnection attempts for monitoring (without blocking)
-     * @param {string} account - Account identifier
-     */
-    trackReconnection(account) {
-        const now = Date.now();
-        const metrics = this.reconnectMetrics.get(account) || {
-            attempts: [],
-            warnings: 0
-        };
-
-        // Clean old attempts outside window
-        metrics.attempts = metrics.attempts.filter(t => now - t < this.metricsWindow);
-        metrics.attempts.push(now);
-
-        // Log warning if excessive reconnections
-        if (metrics.attempts.length > 20) {
-            // More than 20 per minute
-            metrics.warnings++;
-            logger.warn({
-                msg: 'Excessive reconnection rate detected',
-                account,
-                rate: `${metrics.attempts.length}/min`,
-                totalWarnings: metrics.warnings
-            });
-
-            // Emit metrics for monitoring/alerting
-            try {
-                parentPort.postMessage({
-                    cmd: 'metrics',
-                    key: 'imap.reconnect.excessive',
-                    method: 'inc',
-                    args: [1],
-                    meta: { account }
-                });
-            } catch (err) {
-                logger.error({ msg: 'Failed to send metrics', err });
-            }
-        }
-
-        this.reconnectMetrics.set(account, metrics);
-    }
-
     async getAttachment(message) {
         if (!this.accounts.has(message.account)) {
             throw NO_ACTIVE_HANDLER_RESP_ERR;
@@ -798,6 +807,10 @@ class ConnectionHandler {
 
         switch (message.cmd) {
             case 'settings':
+                if (message.data && ('httpProxyEnabled' in message.data || 'httpProxyUrl' in message.data)) {
+                    reloadHttpProxyAgent().catch(err => logger.error({ msg: 'Failed to reload HTTP proxy agent', err }));
+                }
+
                 if (message.data && message.data.logs) {
                     for (let [account, accountObject] of this.accounts) {
                         // update log handling
@@ -841,6 +854,7 @@ class ConnectionHandler {
             case 'listMessages':
             case 'getText':
             case 'getMessage':
+            case 'getMessages':
             case 'updateMessage':
             case 'updateMessages':
             case 'listMailboxes':
@@ -859,11 +873,13 @@ class ConnectionHandler {
             case 'uploadMessage':
             case 'subconnections':
             case 'externalNotify':
+            case 'subscriptionLifecycle':
             case 'listSignatures':
                 return await this[message.cmd](message);
 
             case 'countConnections': {
                 let results = Object.assign({}, DEFAULT_STATES);
+                let subscriptions = { valid: 0, expired: 0, unset: 0, failed: 0, pending: 0 };
 
                 for (let accountObject of this.accounts.values()) {
                     let state;
@@ -872,6 +888,14 @@ class ConnectionHandler {
                         state = 'unassigned';
                     } else {
                         state = await accountObject.connection.currentState();
+
+                        // Collect MS Graph subscription states for Outlook accounts
+                        if (accountObject.connection instanceof OutlookClient) {
+                            let subState = accountObject.connection.subscriptionState || 'unset';
+                            if (subscriptions[subState] !== undefined) {
+                                subscriptions[subState]++;
+                            }
+                        }
                     }
 
                     if (!results[state]) {
@@ -880,7 +904,7 @@ class ConnectionHandler {
                     results[state] += 1;
                 }
 
-                return results;
+                return { connections: results, subscriptions };
             }
 
             default:
@@ -898,6 +922,7 @@ class ConnectionHandler {
                 err.statusCode = 504;
                 err.code = 'Timeout';
                 err.ttl = ttl;
+                this.callQueue.delete(mid);
                 reject(err);
             }, ttl);
 

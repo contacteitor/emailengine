@@ -44,13 +44,6 @@
                         {{else if healthBadge}}
                         <span class="badge badge-{{healthBadgeType}}">{{healthBadge}}</span>
                         {{/if}}
-                        
-                        {{#if circuitBadge}}
-                        <span class="badge badge-{{circuitBadgeType}}">{{circuitBadge}}</span>
-                        {{#if circuitInfo}}
-                        <small class="text-muted">({{circuitInfo}})</small>
-                        {{/if}}
-                        {{/if}}
 
                     </td>
                     <td class="text-right">{{formatInteger threadId userLocale}}</td>
@@ -64,7 +57,13 @@
                         {{heapUsed}}
                         {{/if}}
                     </td>
-                    <td class="text-right">{{formatInteger accounts userLocale}}</td>
+                    <td class="text-right">
+                        {{#if accounts}}
+                        <a href="/admin/internals/thread/{{threadId}}">{{formatInteger accounts userLocale}}</a>
+                        {{else}}
+                        {{formatInteger accounts userLocale}}
+                        {{/if}}
+                    </td>
                     <td class="text-right">{{formatInteger called userLocale}}</td>
                     <td class="text-right">{{formatInteger messages userLocale}}</td>
                     <td class="text-right">

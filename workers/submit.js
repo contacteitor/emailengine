@@ -3,11 +3,11 @@
 const { parentPort } = require('worker_threads');
 
 const packageData = require('../package.json');
-const config = require('wild-config');
+const config = require('@zone-eu/wild-config');
 const logger = require('../lib/logger');
 
 const { REDIS_PREFIX } = require('../lib/consts');
-const { getDuration, readEnvValue, threadStats } = require('../lib/tools');
+const { getDuration, readEnvValue, threadStats, reloadHttpProxyAgent } = require('../lib/tools');
 const { webhooks: Webhooks } = require('../lib/webhooks');
 const settings = require('../lib/settings');
 
@@ -62,6 +62,16 @@ const SUBMIT_QC = (readEnvValue('EENGINE_SUBMIT_QC') && Number(readEnvValue('EEN
 
 const SUBMIT_DELAY = getDuration(readEnvValue('EENGINE_SUBMIT_DELAY') || config.submitDelay) || null;
 
+const NON_RETRYABLE_CODES = new Set([
+    'EAUTH', // authentication failed
+    'ENOAUTH', // no credentials provided
+    'EOAUTH2', // OAuth2 token failure
+    'ETLS', // TLS handshake failed
+    'EENVELOPE', // invalid sender/recipients
+    'EMESSAGE', // message content error
+    'EPROTOCOL' // SMTP protocol mismatch
+]);
+
 let callQueue = new Map();
 let mids = 0;
 
@@ -75,6 +85,7 @@ async function call(message, transferList) {
             err.statusCode = 504;
             err.code = 'Timeout';
             err.ttl = ttl;
+            callQueue.delete(mid);
             reject(err);
         }, ttl);
 
@@ -295,9 +306,11 @@ const submitWorker = new Worker(
                 // ignore
             }
 
-            if (err.statusCode >= 500 && job.attemptsMade < job.opts.attempts) {
+            const isPermanentSmtp = err.statusCode >= 500 && err.statusCode !== 503;
+            const isPermanentCode = NON_RETRYABLE_CODES.has(err.code);
+            if ((isPermanentSmtp || isPermanentCode) && job.attemptsMade < job.opts.attempts) {
                 try {
-                    // do not retry after 5xx error
+                    // do not retry after 5xx error (except 503 which is transient)
                     await job.discard();
                     logger.info({
                         msg: 'Job discarded',
@@ -305,9 +318,6 @@ const submitWorker = new Worker(
                         queueId: job.data.queueId
                     });
                 } catch (E) {
-                    // ignore
-                    logger.error({ msg: 'Failed to discard job', account: queueEntry.account, queueId: job.data.queueId, err: E });
-
                     logger.error({
                         msg: 'Failed to discard job',
                         action: 'submit',
@@ -328,6 +338,17 @@ const submitWorker = new Worker(
     Object.assign(
         {
             concurrency: SUBMIT_QC,
+
+            // Lock duration must exceed SMTP socket timeout (2 min) to prevent
+            // jobs from being marked stalled during normal email delivery
+            lockDuration: 3 * 60 * 1000, // 3 minutes
+
+            // Check for stalled jobs every 60 seconds
+            stalledInterval: 60 * 1000,
+
+            // Allow jobs to recover from stalled state up to 3 times before failing
+            // This handles transient Redis latency or connection issues
+            maxStalledCount: 3,
 
             limiter: SUBMIT_DELAY
                 ? {
@@ -488,6 +509,13 @@ parentPort.on('message', message => {
                     statusCode: err.statusCode
                 });
             });
+    }
+
+    if (message && message.cmd === 'settings') {
+        let d = message.data || {};
+        if ('httpProxyEnabled' in d || 'httpProxyUrl' in d) {
+            reloadHttpProxyAgent().catch(err => logger.error({ msg: 'Failed to reload HTTP proxy agent', err }));
+        }
     }
 });
 

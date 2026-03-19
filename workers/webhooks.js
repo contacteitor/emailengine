@@ -3,14 +3,14 @@
 const { parentPort } = require('worker_threads');
 
 const packageData = require('../package.json');
-const config = require('wild-config');
+const config = require('@zone-eu/wild-config');
 const { createHmac } = require('crypto');
 const logger = require('../lib/logger');
 const { webhooks: Webhooks } = require('../lib/webhooks');
 
 const { GooglePubSub } = require('../lib/oauth/pubsub/google');
 
-const { readEnvValue, threadStats, getDuration, retryAgent, getServiceSecret } = require('../lib/tools');
+const { readEnvValue, threadStats, getDuration, httpAgent, getServiceSecret, reloadHttpProxyAgent } = require('../lib/tools');
 
 const Bugsnag = require('@bugsnag/js');
 if (readEnvValue('BUGSNAG_API_KEY')) {
@@ -67,6 +67,7 @@ async function call(message, transferList) {
             err.statusCode = 504;
             err.code = 'Timeout';
             err.ttl = ttl;
+            callQueue.delete(mid);
             reject(err);
         }, ttl);
 
@@ -117,6 +118,14 @@ async function onCommand(command) {
         case 'googlePubSub':
             await googlePubSub.update(command.app);
             return true;
+        case 'googlePubSubRemove':
+            googlePubSub.remove(command.app);
+            return true;
+        case 'close':
+            clearTimeout(startRetryTimer);
+            googlePubSub.stopAll();
+            await notifyWorker.close(true);
+            return true;
         default:
             logger.debug({ msg: 'Unhandled command', command });
             return 999;
@@ -131,6 +140,18 @@ setInterval(() => {
         // Ignore errors, parent might be shutting down
     }
 }, 10 * 1000).unref();
+
+// Clean up Pub/Sub instances when parent port closes
+parentPort.on('close', () => {
+    clearTimeout(startRetryTimer);
+    googlePubSub.stopAll();
+    // notifyWorker.close() may throw synchronously if not yet initialized
+    try {
+        notifyWorker.close(true).catch(() => {});
+    } catch {
+        // ignore
+    }
+});
 
 // Send initial ready signal
 parentPort.postMessage({ cmd: 'ready' });
@@ -190,6 +211,13 @@ parentPort.on('message', message => {
                     statusCode: err.statusCode
                 });
             });
+    }
+
+    if (message && message.cmd === 'settings') {
+        let d = message.data || {};
+        if ('httpProxyEnabled' in d || 'httpProxyUrl' in d) {
+            reloadHttpProxyAgent().catch(err => logger.error({ msg: 'Failed to reload HTTP proxy agent', err }));
+        }
     }
 });
 
@@ -308,7 +336,7 @@ const notifyWorker = new Worker(
                     {
                         let filteredSubData = {};
                         let isPartial = false;
-                        for (let dataKey of Object.keys(job.data.data)) {
+                        for (let dataKey of Object.keys(job.data.data || {})) {
                             switch (dataKey) {
                                 case 'id':
                                 case 'uid':
@@ -417,7 +445,7 @@ const notifyWorker = new Worker(
                     method: 'post',
                     body,
                     headers,
-                    dispatcher: retryAgent
+                    dispatcher: httpAgent.retry
                 });
                 duration = Date.now() - start;
             } catch (err) {
@@ -426,6 +454,12 @@ const notifyWorker = new Worker(
             }
 
             if (!res.ok) {
+                // Drain response body to release connection back to pool
+                try {
+                    await res.text();
+                } catch {
+                    // ignore drain errors
+                }
                 let err = new Error(res.statusText || `Invalid response: ${res.status} ${res.statusText}`);
                 err.statusCode = res.status;
                 throw err;
@@ -463,28 +497,6 @@ const notifyWorker = new Worker(
                 status: 'success'
             });
         } catch (err) {
-            /*
-            // do not disable by default
-            if (err.status === 410) {
-                // disable webhook
-                logger.error({
-                    msg: 'Webhooks were disabled by server',
-                    action: 'webhook',
-                    queue: job.queue.name,
-                    code: 'disabled_by_server',
-                    job: job.id,
-                    webhooks,
-                    accountWebhooks: !!accountWebhooks,
-                    event: job.name,
-                    status: err.status,
-                    account: job.data.account,
-route: customRoute && customRoute.id,
-                    err
-                });
-                await settings.set('webhooksEnabled', false);
-                return;
-            }
-            */
             logger.error({
                 msg: 'Failed posting webhook',
                 action: 'webhook',
@@ -555,7 +567,16 @@ route: customRoute && customRoute.id,
     },
     Object.assign(
         {
-            concurrency: Number(NOTIFY_QC) || 1
+            concurrency: Number(NOTIFY_QC) || 1,
+
+            // Webhook HTTP requests have 90s timeout, lock should exceed this
+            lockDuration: 3 * 60 * 1000, // 3 minutes
+
+            // Check for stalled jobs every 60 seconds
+            stalledInterval: 60 * 1000,
+
+            // Allow jobs to recover from stalled state up to 3 times
+            maxStalledCount: 3
         },
         queueConf || {}
     )
@@ -599,13 +620,26 @@ notifyWorker.on('failed', async job => {
     });
 });
 
-googlePubSub
-    .start()
-    .then(() => {
-        logger.info({ msg: 'Started processing Google pub/sub' });
-    })
-    .catch(err => {
-        logger.fatal({ msg: 'Failed to start processing Google pub/sub', err });
-    });
+let startRetryTimer = null;
+
+(function startGooglePubSub(attempt) {
+    googlePubSub
+        .start()
+        .then(() => {
+            logger.info({ msg: 'Started processing Google pub/sub' });
+        })
+        .catch(err => {
+            let maxNormalAttempts = 20;
+            let delay;
+            if (attempt < maxNormalAttempts) {
+                delay = Math.min(5000 * Math.pow(2, Math.min(attempt, 10)), 60000);
+                logger.error({ msg: 'Failed to start processing Google pub/sub', err, attempt: attempt + 1, retryMs: delay });
+            } else {
+                delay = 5 * 60 * 1000;
+                logger.warn({ msg: 'Failed to start processing Google pub/sub (reduced frequency)', err, attempt: attempt + 1, retryMs: delay });
+            }
+            startRetryTimer = setTimeout(() => startGooglePubSub(attempt + 1), delay);
+        });
+})(0);
 
 logger.info({ msg: 'Started Webhooks worker thread', version: packageData.version });

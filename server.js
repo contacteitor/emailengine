@@ -10,7 +10,7 @@
  * @module server
  * @requires dotenv
  * @requires worker_threads
- * @requires wild-config
+ * @requires @zone-eu/wild-config
  * @see {@link https://emailengine.app}
  */
 
@@ -45,12 +45,15 @@ const os = require('os');
 process.env.UV_THREADPOOL_SIZE =
     process.env.UV_THREADPOOL_SIZE && !isNaN(process.env.UV_THREADPOOL_SIZE) ? Number(process.env.UV_THREADPOOL_SIZE) : Math.max(os.cpus().length, 4);
 
-// Cache command line arguments before wild-config processes them
+// Disable Tensorflow warnings
+process.env.TF_CPP_MIN_LOG_LEVEL = '2';
+
+// Cache command line arguments before @zone-eu/wild-config processes them
 const argv = process.argv.slice(2);
 
 const { Worker: WorkerThread, SHARE_ENV } = require('worker_threads');
 const packageData = require('./package.json');
-const config = require('wild-config');
+const config = require('@zone-eu/wild-config');
 const logger = require('./lib/logger');
 
 // Import utility functions
@@ -68,7 +71,8 @@ const {
     setLicense,
     getRedisStats,
     threadStats,
-    retryAgent
+    httpAgent,
+    reloadHttpProxyAgent
 } = require('./lib/tools');
 const MetricsCollector = require('./lib/metrics-collector');
 
@@ -98,6 +102,8 @@ const {
 } = require('@postalsys/email-ai-tools');
 const { fetch: fetchCmd } = require('undici');
 
+const bounceClassifier = require('@postalsys/bounce-classifier');
+
 const v8 = require('node:v8');
 
 // Initialize Bugsnag error tracking if API key is provided
@@ -126,7 +132,7 @@ if (readEnvValue('BUGSNAG_API_KEY')) {
 
 // Import additional dependencies
 const pathlib = require('path');
-const { redis, queueConf } = require('./lib/db');
+const { redis, queueConf, notifyQueue, submitQueue, documentsQueue, exportQueue } = require('./lib/db');
 const promClient = require('prom-client');
 const fs = require('fs').promises;
 const crypto = require('crypto');
@@ -247,6 +253,12 @@ const METRIC_RECENT = 10 * 60 * 1000; // 10min
 const HAS_API_PROXY_SET = hasEnvValue('EENGINE_API_PROXY') || typeof config.api.proxy !== 'undefined';
 const API_PROXY = hasEnvValue('EENGINE_API_PROXY') ? getBoolean(readEnvValue('EENGINE_API_PROXY')) : getBoolean(config.api.proxy);
 
+// API authentication requirement configuration (default: true)
+const REQUIRE_API_AUTH = hasEnvValue('EENGINE_REQUIRE_API_AUTH') ? getBoolean(readEnvValue('EENGINE_REQUIRE_API_AUTH')) : null;
+
+// OAuth2 token access configuration
+const ENABLE_OAUTH_TOKENS_API = hasEnvValue('EENGINE_ENABLE_OAUTH_TOKENS_API') ? getBoolean(readEnvValue('EENGINE_ENABLE_OAUTH_TOKENS_API')) : null;
+
 // Log startup information
 logger.info({
     msg: 'EmailEngine starting up',
@@ -287,10 +299,11 @@ const licenseInfo = {
  */
 const THREAD_NAMES = {
     main: 'Main thread',
-    imap: 'IMAP worker',
+    imap: 'Email worker',
     webhooks: 'Webhook worker',
     api: 'HTTP and API server',
     submit: 'Email sending worker',
+    export: 'Export worker',
     documents: 'Document store indexing worker',
     imapProxy: 'IMAP proxy server',
     smtp: 'SMTP proxy server'
@@ -303,7 +316,8 @@ const THREAD_NAMES = {
 const THREAD_CONFIG_VALUES = {
     imap: { key: 'EENGINE_WORKERS', value: config.workers.imap },
     submit: { key: 'EENGINE_WORKERS_SUBMIT', value: config.workers.submit },
-    webhooks: { key: 'EENGINE_WORKERS_WEBHOOKS', value: config.workers.webhooks }
+    webhooks: { key: 'EENGINE_WORKERS_WEBHOOKS', value: config.workers.webhooks },
+    export: { key: 'EENGINE_WORKERS_EXPORT', value: config.workers.export || 1 }
 };
 
 // Queue event handlers for different job queues
@@ -412,6 +426,24 @@ const metrics = {
         help: 'IMAP bytes received'
     }),
 
+    oauth2TokenRefresh: new promClient.Counter({
+        name: 'oauth2_token_refresh',
+        help: 'OAuth2 access token refresh attempts',
+        labelNames: ['status', 'provider', 'statusCode']
+    }),
+
+    oauth2ApiRequest: new promClient.Counter({
+        name: 'oauth2_api_request',
+        help: 'OAuth2 API requests (MS Graph, Gmail API)',
+        labelNames: ['status', 'provider', 'statusCode']
+    }),
+
+    outlookSubscriptions: new promClient.Gauge({
+        name: 'outlook_subscriptions',
+        help: 'MS Graph webhook subscription states',
+        labelNames: ['status']
+    }),
+
     webhooks: new promClient.Counter({
         name: 'webhooks',
         help: 'Webhooks sent',
@@ -446,6 +478,16 @@ const metrics = {
         name: 'threads',
         help: 'Worker Threads',
         labelNames: ['type', 'recent']
+    }),
+
+    unresponsiveWorkers: new promClient.Gauge({
+        name: 'unresponsive_workers',
+        help: 'Number of unresponsive worker threads'
+    }),
+
+    licenseDaysRemaining: new promClient.Gauge({
+        name: 'license_days_remaining',
+        help: 'Days until license expires (-1 for lifetime, 0 for no license)'
     }),
 
     emailengineConfig: new promClient.Gauge({
@@ -574,6 +616,8 @@ let workerAssigned = new WeakMap(); // Map of worker -> Set of accounts
 let onlineWorkers = new WeakSet(); // Set of workers that are online
 let reassignmentTimer = null; // Timer for failsafe reassignment
 let reassignmentPending = false; // Flag to track if reassignment is pending
+let assignRetryCount = 0; // Counter for safety-net retries in assignAccounts
+const MAX_ASSIGN_RETRIES = 3; // Max consecutive safety-net retries before giving up
 
 // Worker management
 let imapInitialWorkersLoaded = false; // Have all initial IMAP workers started?
@@ -586,12 +630,6 @@ let workerHeartbeats = new WeakMap(); // Map of worker -> last heartbeat timesta
 let workerHealthStatus = new WeakMap(); // Map of worker -> health status
 const HEARTBEAT_TIMEOUT = 30 * 1000; // 30 seconds before marking unhealthy
 const HEARTBEAT_RESTART_TIMEOUT = 60 * 1000; // 60 seconds before auto-restart
-
-// Circuit breaker for worker communication
-let workerCircuitBreakers = new WeakMap(); // Map of worker -> circuit breaker state
-const CIRCUIT_FAILURE_THRESHOLD = 3; // Open circuit after 3 failures
-const CIRCUIT_RESET_TIMEOUT = 30 * 1000; // Try to close circuit after 30s
-const CIRCUIT_HALF_OPEN_ATTEMPTS = 1; // Number of test requests in half-open state
 
 // Suspended worker types (when no license is active)
 let suspendedWorkerTypes = new Set();
@@ -754,11 +792,6 @@ async function getThreadsInfo() {
             threadData.timeSinceHeartbeat = Date.now() - lastHeartbeat;
         }
 
-        // Add circuit breaker status
-        const circuit = getCircuitBreaker(worker);
-        threadData.circuitState = circuit.state;
-        threadData.circuitFailures = circuit.failures;
-
         // Add worker metadata
         let workerMeta = workersMeta.has(worker) ? workersMeta.get(worker) : {};
         for (let key of Object.keys(workerMeta)) {
@@ -868,119 +901,6 @@ function startHealthMonitoring() {
 }
 
 /**
- * Get or initialize circuit breaker state for a worker
- * @param {Worker} worker - The worker thread
- * @returns {Object} Circuit breaker state
- */
-function getCircuitBreaker(worker) {
-    if (!workerCircuitBreakers.has(worker)) {
-        workerCircuitBreakers.set(worker, {
-            state: 'closed', // closed, open, half-open
-            failures: 0,
-            lastFailureTime: null,
-            lastAttemptTime: null,
-            halfOpenAttempts: 0
-        });
-    }
-    return workerCircuitBreakers.get(worker);
-}
-
-/**
- * Record a successful call to a worker
- * @param {Worker} worker - The worker thread
- */
-function recordCircuitSuccess(worker) {
-    const circuit = getCircuitBreaker(worker);
-
-    if (circuit.state === 'half-open') {
-        // Successful call in half-open state, close the circuit
-        logger.info({
-            msg: 'Circuit breaker closed after successful test',
-            threadId: worker.threadId,
-            type: workersMeta.get(worker)?.type
-        });
-    }
-
-    // Reset circuit to closed state
-    circuit.state = 'closed';
-    circuit.failures = 0;
-    circuit.lastFailureTime = null;
-    circuit.halfOpenAttempts = 0;
-}
-
-/**
- * Record a failed call to a worker
- * @param {Worker} worker - The worker thread
- */
-function recordCircuitFailure(worker) {
-    const circuit = getCircuitBreaker(worker);
-    const now = Date.now();
-
-    circuit.failures++;
-    circuit.lastFailureTime = now;
-
-    if (circuit.state === 'half-open') {
-        // Failed in half-open state, reopen the circuit
-        circuit.state = 'open';
-        circuit.halfOpenAttempts = 0;
-        logger.warn({
-            msg: 'Circuit breaker reopened after failed test',
-            threadId: worker.threadId,
-            type: workersMeta.get(worker)?.type
-        });
-    } else if (circuit.failures >= CIRCUIT_FAILURE_THRESHOLD && circuit.state === 'closed') {
-        // Threshold reached, open the circuit
-        circuit.state = 'open';
-        logger.warn({
-            msg: 'Circuit breaker opened due to failures',
-            threadId: worker.threadId,
-            type: workersMeta.get(worker)?.type,
-            failures: circuit.failures
-        });
-    }
-}
-
-/**
- * Check if circuit breaker allows a call to the worker
- * @param {Worker} worker - The worker thread
- * @returns {boolean} Whether the call is allowed
- */
-function isCircuitOpen(worker) {
-    const circuit = getCircuitBreaker(worker);
-    const now = Date.now();
-
-    if (circuit.state === 'closed') {
-        return false; // Circuit is closed, allow calls
-    }
-
-    if (circuit.state === 'open') {
-        // Check if enough time has passed to try half-open
-        if (now - circuit.lastFailureTime > CIRCUIT_RESET_TIMEOUT) {
-            circuit.state = 'half-open';
-            circuit.halfOpenAttempts = 0;
-            logger.info({
-                msg: 'Circuit breaker entering half-open state',
-                threadId: worker.threadId,
-                type: workersMeta.get(worker)?.type
-            });
-            return false; // Allow one test call
-        }
-        return true; // Circuit is open, block calls
-    }
-
-    if (circuit.state === 'half-open') {
-        // Allow limited attempts in half-open state
-        if (circuit.halfOpenAttempts < CIRCUIT_HALF_OPEN_ATTEMPTS) {
-            circuit.halfOpenAttempts++;
-            return false; // Allow test call
-        }
-        return true; // Block additional calls until test succeeds
-    }
-
-    return false;
-}
-
-/**
  * Send a webhook notification
  * @param {string} account - Account ID
  * @param {string} event - Event type
@@ -1055,6 +975,16 @@ let spawnWorker = async type => {
     return new Promise((resolve, reject) => {
         let isOnline = false;
         let threadId = worker.threadId;
+
+        // Capture worker crash errors for logging
+        worker.on('error', err => {
+            logger.error({
+                msg: 'Worker thread error',
+                type,
+                threadId: worker.threadId,
+                err
+            });
+        });
 
         // Handle worker coming online
         worker.on('online', () => {
@@ -1400,6 +1330,11 @@ let spawnWorker = async type => {
                 }
 
                 case 'settings':
+                    // Reload HTTP proxy agent in the main thread
+                    if (message.data && ('httpProxyEnabled' in message.data || 'httpProxyUrl' in message.data)) {
+                        reloadHttpProxyAgent().catch(err => logger.error({ msg: 'Failed to reload HTTP proxy agent', err }));
+                    }
+
                     // Forward settings changes to all IMAP workers
                     availableIMAPWorkers.forEach(worker => {
                         try {
@@ -1408,6 +1343,20 @@ let spawnWorker = async type => {
                             logger.error({ msg: 'Unable to forward settings to worker', worker: worker.threadId, callPayload: message, err });
                         }
                     });
+
+                    // Forward settings changes to webhooks, submit, and export workers
+                    for (let type of ['webhooks', 'submit', 'export']) {
+                        let typeWorkers = workers.get(type);
+                        if (typeWorkers) {
+                            typeWorkers.forEach(worker => {
+                                try {
+                                    postMessage(worker, message);
+                                } catch (err) {
+                                    logger.error({ msg: 'Unable to forward settings to worker', type, worker: worker.threadId, err });
+                                }
+                            });
+                        }
+                    }
                     return;
 
                 case 'change':
@@ -1535,27 +1484,6 @@ let spawnWorker = async type => {
  * @throws {Error} Timeout or communication error
  */
 async function call(worker, message, transferList) {
-    // Check circuit breaker first
-    if (isCircuitOpen(worker)) {
-        const err = new Error('Circuit breaker is open - worker is unresponsive');
-        err.statusCode = 503;
-        err.code = 'CircuitOpen';
-        err.threadId = worker.threadId;
-
-        // For resource-usage calls, return error info instead of throwing
-        if (message.cmd === 'resource-usage') {
-            return {
-                resourceUsageError: {
-                    error: err.message,
-                    code: err.code,
-                    circuitOpen: true
-                }
-            };
-        }
-
-        throw err;
-    }
-
     return new Promise((resolve, reject) => {
         // Generate unique message ID
         let mid = `${Date.now()}:${++mids}`;
@@ -1571,33 +1499,19 @@ async function call(worker, message, transferList) {
             err.ttl = ttl;
             err.command = message;
 
-            // Record circuit breaker failure
-            recordCircuitFailure(worker);
             callQueue.delete(mid);
 
             reject(err);
         }, ttl);
 
-        // Store callback info with circuit breaker tracking
+        // Store callback info
         callQueue.set(mid, {
             resolve: result => {
                 clearTimeout(timer);
-                recordCircuitSuccess(worker);
                 resolve(result);
             },
             reject: err => {
                 clearTimeout(timer);
-
-                // Only record circuit breaker failures for actual worker/infrastructure issues
-                // Do NOT count application-level errors that indicate the worker is functioning correctly
-                // Application errors have statusCode in the 4xx range (client errors)
-                // Infrastructure errors have statusCode in the 5xx range (server errors) or are timeouts
-                const isInfrastructureFailure = !err.statusCode || err.statusCode >= 500 || err.code === 'Timeout';
-
-                if (isInfrastructureFailure) {
-                    recordCircuitFailure(worker);
-                }
-
                 reject(err);
             },
             timer
@@ -1671,6 +1585,11 @@ async function assignAccounts() {
         let totalAccounts = assigned.size + unassigned.size;
         let targetPerWorker = Math.ceil(totalAccounts / availableIMAPWorkers.size);
 
+        // Collect accounts that fail assignment so we do not re-insert into
+        // the Set we are iterating (re-insertion during for..of would cause
+        // the same account to be visited again in the same pass).
+        let failedAccounts = [];
+
         // Assign each unassigned account
         for (let account of unassigned) {
             if (!availableIMAPWorkers.size) {
@@ -1719,16 +1638,37 @@ async function assignAccounts() {
             unassigned.delete(account);
 
             // Notify worker of assignment
-            await call(worker, {
-                cmd: 'assign',
-                account,
-                runIndex
-            });
+            try {
+                await call(worker, {
+                    cmd: 'assign',
+                    account,
+                    runIndex
+                });
+            } catch (err) {
+                // Roll back -- account was never actually assigned
+                workerAssigned.get(worker).delete(account);
+                assigned.delete(account);
+                // Revert load map so subsequent iterations see accurate counts
+                if (!isReassignment) {
+                    workerLoadMap.set(worker, workerLoadMap.get(worker) - 1);
+                    sortedWorkers = Array.from(workerLoadMap.entries())
+                        .sort((a, b) => a[1] - b[1])
+                        .map(entry => entry[0]);
+                }
+                failedAccounts.push(account);
+                logger.error({ msg: 'Failed to assign account to worker', account, threadId: worker.threadId, err });
+                continue;
+            }
 
             // Add delay between assignments to avoid overwhelming the system
             if (CONNECTION_SETUP_DELAY) {
                 await new Promise(r => setTimeout(r, CONNECTION_SETUP_DELAY));
             }
+        }
+
+        // Re-add failed accounts after iteration completes
+        for (let account of failedAccounts) {
+            unassigned.add(account);
         }
 
         // Log final distribution for monitoring
@@ -1744,6 +1684,32 @@ async function assignAccounts() {
         });
     } finally {
         assigning = false;
+
+        // Safety net: if accounts remain unassigned, schedule a retry with backoff
+        if (unassigned && unassigned.size > 0 && availableIMAPWorkers.size > 0 && !isClosing) {
+            assignRetryCount++;
+            if (assignRetryCount <= MAX_ASSIGN_RETRIES) {
+                let delay = 5000 * assignRetryCount;
+                logger.warn({
+                    msg: 'Accounts remain unassigned after assignment pass, scheduling retry',
+                    remaining: unassigned.size,
+                    retry: assignRetryCount,
+                    maxRetries: MAX_ASSIGN_RETRIES,
+                    delayMs: delay
+                });
+                setTimeout(() => {
+                    assignAccounts().catch(err => logger.error({ msg: 'Retry assignment failed', err }));
+                }, delay);
+            } else {
+                logger.error({
+                    msg: 'Max assignment retries reached, accounts remain unassigned',
+                    remaining: unassigned.size
+                });
+                assignRetryCount = 0;
+            }
+        } else {
+            assignRetryCount = 0;
+        }
     }
 }
 
@@ -1814,7 +1780,7 @@ let licenseCheckHandler = async opts => {
                         app: '@postalsys/emailengine-app',
                         instance: (await settings.get('serviceId')) || ''
                     }),
-                    dispatcher: retryAgent
+                    dispatcher: httpAgent.retry
                 });
 
                 let data = await res.json();
@@ -2071,12 +2037,32 @@ async function updateQueueCounters() {
     metrics.emailengineConfig.set({ config: 'workersWebhooks' }, config.workers.webhooks);
     metrics.emailengineConfig.set({ config: 'workersSubmission' }, config.workers.submit);
 
+    // Update license days remaining metric
+    if (licenseInfo.active && licenseInfo.details) {
+        if (licenseInfo.details.lt) {
+            // Lifetime license
+            metrics.licenseDaysRemaining.set(-1);
+        } else if (licenseInfo.details.expires) {
+            // Time-limited license
+            let expiresAt = new Date(licenseInfo.details.expires).getTime();
+            let daysRemaining = Math.max(0, Math.ceil((expiresAt - Date.now()) / (24 * 60 * 60 * 1000)));
+            metrics.licenseDaysRemaining.set(daysRemaining);
+        } else {
+            // Subscription license (no fixed expiry)
+            metrics.licenseDaysRemaining.set(-1);
+        }
+    } else {
+        // No active license
+        metrics.licenseDaysRemaining.set(0);
+    }
+
     // Update thread metrics
     let threadsInfo = await getThreadsInfo();
 
     let now = Date.now();
 
     let threadCounts = new Map();
+    let unresponsiveCount = 0;
     for (let workerThreadInfo of threadsInfo || []) {
         let key = workerThreadInfo.type;
         let metricKey = `${key}_total`;
@@ -2092,6 +2078,11 @@ async function updateQueueCounters() {
         } else {
             threadCounts.set(metricKey, threadCounts.get(metricKey) + 1);
         }
+
+        // Count unresponsive workers
+        if (workerThreadInfo.resourceUsageError && workerThreadInfo.resourceUsageError.unresponsive) {
+            unresponsiveCount++;
+        }
     }
 
     // Set thread count metrics
@@ -2099,6 +2090,9 @@ async function updateQueueCounters() {
         let [type, age] = key.split('_');
         metrics.threads.set({ type, recent: age === 'recent' ? 'yes' : 'no' }, value || 0);
     }
+
+    // Set unresponsive workers metric
+    metrics.unresponsiveWorkers.set(unresponsiveCount);
 
     // Update queue metrics
     for (let queue of ['notify', 'submit', 'documents']) {
@@ -2329,6 +2323,20 @@ async function onCommand(worker, message) {
             return false;
         }
 
+        case 'bounceClassify':
+            // Classify bounce response message
+            try {
+                return await bounceClassifier.classify(message.data.message);
+            } catch (err) {
+                // ignore
+                logger.error({
+                    msg: 'Failed to classify bounce response',
+                    bounceResponse: message.data.message,
+                    err
+                });
+            }
+            return false;
+
         // OpenAI integration commands - run in main process to avoid memory overhead
         case 'generateSummary': {
             let requestOpts = {
@@ -2361,16 +2369,23 @@ async function onCommand(worker, message) {
                 requestOpts.topP = openAiTopP;
             }
 
-            // Set max tokens based on model
-            switch (openAiModel) {
-                case 'gpt-4':
-                    requestOpts.maxTokens = 6500;
-                    break;
-                case 'gpt-3.5-turbo':
-                case 'gpt-3.5-turbo-instruct':
-                default:
-                    requestOpts.maxTokens = 3000;
-                    break;
+            let openAiMaxTokens = message.data.openAiMaxTokens || (await settings.get('openAiMaxTokens'));
+            if (openAiMaxTokens) {
+                requestOpts.maxTokens = openAiMaxTokens;
+            } else {
+                // Set max tokens based on model
+                switch (openAiModel.substring(0, 5)) {
+                    case 'gpt-3':
+                        requestOpts.maxTokens = 3000;
+                        break;
+                    case 'gpt-4':
+                        requestOpts.maxTokens = 6500;
+                        break;
+                    case 'gpt-5':
+                    default:
+                        requestOpts.maxTokens = 18000;
+                        break;
+                }
             }
 
             requestOpts.user = message.data.account;
@@ -2440,14 +2455,16 @@ async function onCommand(worker, message) {
             }
 
             // Set max tokens based on model
-            switch (openAiModel) {
+            switch (openAiModel.substring(0, 5)) {
+                case 'gpt-3':
+                    requestOpts.maxTokens = 3000;
+                    break;
                 case 'gpt-4':
                     requestOpts.maxTokens = 6500;
                     break;
-                case 'gpt-3.5-turbo':
-                case 'gpt-3.5-turbo-instruct':
+                case 'gpt-5':
                 default:
-                    requestOpts.maxTokens = 3000;
+                    requestOpts.maxTokens = 18000;
                     break;
             }
 
@@ -2576,6 +2593,37 @@ async function onCommand(worker, message) {
             return await getThreadsInfo();
         }
 
+        case 'worker-accounts': {
+            // Get accounts assigned to a specific worker thread
+            const { threadId, page = 1, pageSize = 20 } = message;
+            const accounts = [];
+
+            // Find worker by threadId and get its assigned accounts
+            for (const [account, worker] of assigned) {
+                if (worker.threadId === threadId) {
+                    accounts.push(account);
+                }
+            }
+
+            // Sort accounts for consistent ordering
+            accounts.sort((a, b) => a.localeCompare(b));
+
+            // Paginate
+            const totalAccounts = accounts.length;
+            const totalPages = Math.ceil(totalAccounts / pageSize) || 1;
+            const currentPage = Math.min(Math.max(1, page), totalPages);
+            const start = (currentPage - 1) * pageSize;
+            const pagedAccounts = accounts.slice(start, start + pageSize);
+
+            return {
+                accounts: pagedAccounts,
+                total: totalAccounts,
+                page: currentPage,
+                pageSize,
+                pages: totalPages
+            };
+        }
+
         case 'rate-limit': {
             return await checkRateLimit(message.key, message.count, message.allowed, message.windowSize);
         }
@@ -2661,10 +2709,13 @@ async function onCommand(worker, message) {
             break;
 
         // IMAP operations - forward to assigned worker
+        case 'submitMessage':
+        case 'queueMessage':
         case 'listMessages':
         case 'getRawMessage':
         case 'getText':
         case 'getMessage':
+        case 'getMessages':
         case 'updateMessage':
         case 'updateMessages':
         case 'listMailboxes':
@@ -2676,8 +2727,6 @@ async function onCommand(worker, message) {
         case 'createMailbox':
         case 'modifyMailbox':
         case 'deleteMailbox':
-        case 'submitMessage':
-        case 'queueMessage':
         case 'uploadMessage':
         case 'getAttachment':
         case 'listSignatures': {
@@ -2692,7 +2741,6 @@ async function onCommand(worker, message) {
             if (['getRawMessage', 'getAttachment'].includes(message.cmd) && message.port) {
                 transferList.push(message.port);
             }
-
             if (['submitMessage', 'queueMessage'].includes(message.cmd) && typeof message.raw === 'object') {
                 transferList.push(message.raw);
             }
@@ -2710,29 +2758,60 @@ async function onCommand(worker, message) {
             return await call(assignedWorker, message, []);
         }
 
-        case 'googlePubSub': {
-            // Notify all webhook workers about PubSub app
-            for (let worker of workers.get('webhooks')) {
-                await call(worker, message);
+        case 'googlePubSub':
+        case 'googlePubSubRemove': {
+            // Notify all webhook workers about PubSub app changes
+            if (!workers.has('webhooks')) {
+                return true;
             }
+            let proms = [];
+            for (let worker of workers.get('webhooks')) {
+                proms.push(
+                    call(worker, message).catch(err => {
+                        logger.error({ msg: 'Failed to notify webhook worker about PubSub change', cmd: message.cmd, err });
+                    })
+                );
+            }
+            await Promise.all(proms);
             return true;
         }
 
         case 'externalNotify': {
             // External notification (e.g., Google Push)
-            for (let account of message.accounts) {
+            let proms = [];
+            for (let account of message.accounts || []) {
                 if (!assigned.has(account)) {
                     continue;
                 }
 
                 let assignedWorker = assigned.get(account);
-                try {
-                    await call(assignedWorker, { cmd: 'externalNotify', account, historyId: message.historyId });
-                } catch (err) {
-                    logger.error({ msg: 'External notification failed', cmd: 'externalNotify', account, historyId: message.historyId, err });
-                }
+                proms.push(
+                    call(assignedWorker, { cmd: 'externalNotify', account, historyId: message.historyId }).catch(err => {
+                        logger.error({ msg: 'External notification failed', cmd: 'externalNotify', account, historyId: message.historyId, err });
+                    })
+                );
             }
+            await Promise.all(proms);
             return true;
+        }
+
+        case 'subscriptionLifecycle': {
+            // MS Graph subscription lifecycle event (reauthorizationRequired, subscriptionRemoved)
+            if (!assigned.has(message.account)) {
+                logger.warn({
+                    msg: 'Subscription lifecycle event for unassigned account',
+                    account: message.account,
+                    event: message.event
+                });
+                return false;
+            }
+            let assignedWorker = assigned.get(message.account);
+            return await call(assignedWorker, {
+                cmd: 'subscriptionLifecycle',
+                account: message.account,
+                event: message.event,
+                timeout: message.timeout
+            });
         }
     }
 
@@ -2752,6 +2831,9 @@ async function collectMetrics() {
         metricsResult[key] = 0;
     });
 
+    // Subscription state counters
+    let subscriptionResults = { valid: 0, expired: 0, unset: 0, failed: 0, pending: 0 };
+
     // Collect from each IMAP worker
     if (workers.has('imap')) {
         let imapWorkers = workers.get('imap');
@@ -2763,12 +2845,24 @@ async function collectMetrics() {
 
             try {
                 let workerStats = await call(imapWorker, { cmd: 'countConnections' });
-                Object.keys(workerStats || {}).forEach(status => {
+
+                // Handle connection states
+                let connectionStats = workerStats?.connections || workerStats || {};
+                Object.keys(connectionStats).forEach(status => {
                     if (!metricsResult[status]) {
                         metricsResult[status] = 0;
                     }
-                    metricsResult[status] += Number(workerStats[status]) || 0;
+                    metricsResult[status] += Number(connectionStats[status]) || 0;
                 });
+
+                // Handle subscription states (MS Graph)
+                if (workerStats?.subscriptions) {
+                    Object.keys(workerStats.subscriptions).forEach(status => {
+                        if (subscriptionResults[status] !== undefined) {
+                            subscriptionResults[status] += Number(workerStats.subscriptions[status]) || 0;
+                        }
+                    });
+                }
             } catch (err) {
                 logger.error({ msg: 'Connection count failed', err });
             }
@@ -2778,9 +2872,14 @@ async function collectMetrics() {
     // Add unassigned accounts to disconnected count
     metricsResult.disconnected = (Number(metricsResult.disconnected) || 0) + (unassigned ? unassigned.size : 0);
 
-    // Update Prometheus metrics
+    // Update Prometheus metrics for connections
     Object.keys(metricsResult).forEach(status => {
         metrics.imapConnections.set({ status }, metricsResult[status]);
+    });
+
+    // Update Prometheus metrics for MS Graph subscriptions
+    Object.keys(subscriptionResults).forEach(status => {
+        metrics.outlookSubscriptions.set({ status }, subscriptionResults[status]);
     });
 }
 
@@ -2792,6 +2891,19 @@ const gracefulShutdown = async signal => {
         return;
     }
     isClosing = true;
+
+    // Signal webhooks workers to stop Pub/Sub pull loops before exiting (from upstream v2.64.0)
+    if (workers.has('webhooks')) {
+        const webhookCloseProms = [];
+        for (let worker of workers.get('webhooks')) {
+            webhookCloseProms.push(
+                call(worker, { cmd: 'close', timeout: 4000 }).catch(err => {
+                    logger.error({ msg: 'Failed to signal webhooks worker to close', err });
+                })
+            );
+        }
+        await Promise.allSettled(webhookCloseProms);
+    }
 
     const shutdownStart = Date.now();
     const podName = process.env.HOSTNAME || os.hostname();
@@ -2846,6 +2958,7 @@ const gracefulShutdown = async signal => {
     if (queueEvents.notify) queueCloseProms.push(queueEvents.notify.close());
     if (queueEvents.submit) queueCloseProms.push(queueEvents.submit.close());
     if (queueEvents.documents) queueCloseProms.push(queueEvents.documents.close());
+    if (queueEvents.export) queueCloseProms.push(queueEvents.export.close());
     if (queueCloseProms.length) {
         await Promise.allSettled(queueCloseProms);
         console.log(`[SHUTDOWN] QueueEvents BullMQ cerrados`);
@@ -3056,6 +3169,19 @@ const startApplication = async () => {
         await settings.set('scriptEnv', {}); // empty object
     }
 
+    // OAuth2 token access settings
+    let existingEnableOAuthTokensApi = await settings.get('enableOAuthTokensApi');
+    if (existingEnableOAuthTokensApi === null && ENABLE_OAUTH_TOKENS_API !== null) {
+        await settings.set('enableOAuthTokensApi', ENABLE_OAUTH_TOKENS_API);
+    }
+
+    // API authentication requirement settings
+    let existingDisableTokens = await settings.get('disableTokens');
+    if (existingDisableTokens === null && REQUIRE_API_AUTH !== null) {
+        // disableTokens is the inverse of REQUIRE_API_AUTH
+        await settings.set('disableTokens', !REQUIRE_API_AUTH);
+    }
+
     // Import prepared token
     if (preparedToken) {
         try {
@@ -3101,6 +3227,9 @@ const startApplication = async () => {
     // Workers will exit when Redis reconnects after disconnection,
     // and the server will automatically restart them
 
+    // Initialize HTTP proxy agent from settings/env vars before spawning workers
+    await reloadHttpProxyAgent();
+
     // -- START WORKER THREADS
 
     // Start API server first for health checks
@@ -3139,6 +3268,11 @@ const startApplication = async () => {
     // Start submission workers
     for (let i = 0; i < config.workers.submit; i++) {
         await spawnWorker('submit');
+    }
+
+    // Start export workers
+    for (let i = 0; i < (config.workers.export || 1); i++) {
+        await spawnWorker('export');
     }
 
     // Start document processing worker
@@ -3181,11 +3315,6 @@ const startApplication = async () => {
                 metadata.timeSinceHeartbeat = Date.now() - lastHeartbeat;
             }
 
-            // Add circuit breaker status
-            const circuit = getCircuitBreaker(worker);
-            metadata.circuitState = circuit.state;
-            metadata.circuitFailures = circuit.failures;
-
             // Add worker metadata
             let workerMeta = workersMeta.has(worker) ? workersMeta.get(worker) : {};
             for (let key of Object.keys(workerMeta)) {
@@ -3204,6 +3333,7 @@ const startApplication = async () => {
 
 // Start the application
 startApplication()
+    .then(bounceClassifier.initialize)
     .then(() => {
         // Start periodic metric collection
         setInterval(() => {
@@ -3227,6 +3357,31 @@ startApplication()
         queueEvents.notify = new QueueEvents('notify', Object.assign({}, queueConf));
         queueEvents.submit = new QueueEvents('submit', Object.assign({}, queueConf));
         queueEvents.documents = new QueueEvents('documents', Object.assign({}, queueConf));
+        queueEvents.export = new QueueEvents('export', Object.assign({}, queueConf));
+
+        // Periodic queue cleanup (every 6 hours)
+        const QUEUE_CLEANUP_INTERVAL = 6 * 60 * 60 * 1000;
+
+        async function cleanupQueues() {
+            const queues = [notifyQueue, submitQueue, documentsQueue, exportQueue];
+            for (const queue of queues) {
+                try {
+                    // Clean completed jobs older than 24 hours
+                    await queue.clean(24 * 60 * 60 * 1000, 10000, 'completed');
+                    // Clean failed jobs older than 7 days
+                    await queue.clean(7 * 24 * 60 * 60 * 1000, 10000, 'failed');
+                    logger.trace({ msg: 'Queue cleanup completed', queue: queue.name });
+                } catch (err) {
+                    logger.error({ msg: 'Queue cleanup failed', queue: queue.name, err });
+                }
+            }
+        }
+
+        const queueCleanupTimer = setInterval(cleanupQueues, QUEUE_CLEANUP_INTERVAL);
+        queueCleanupTimer.unref();
+
+        // Initial cleanup 5 minutes after startup
+        setTimeout(cleanupQueues, 5 * 60 * 1000).unref();
     })
     .catch(err => {
         logger.fatal({ msg: 'Application startup failed', err });

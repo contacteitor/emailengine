@@ -1,5 +1,345 @@
 # Changelog
 
+## [2.64.0](https://github.com/postalsys/emailengine/compare/v2.63.4...v2.64.0) (2026-03-16)
+
+
+### Features
+
+* add configurable Gmail Pub/Sub subscription TTL setting ([ca33e7f](https://github.com/postalsys/emailengine/commit/ca33e7f9101b3375d7e0001cdbe1d7a41a9442d3))
+* add Gmail Subscriptions tab to OAuth config page ([3bd30bf](https://github.com/postalsys/emailengine/commit/3bd30bf0bbc26600eae40d42e95ef7976257e4f2))
+
+
+### Bug Fixes
+
+* add .catch() to fire-and-forget setMeta and track error fingerprints ([672a03e](https://github.com/postalsys/emailengine/commit/672a03e2524bcaa26c4d3c908fa828f4e636999b))
+* add lock to del() to prevent race with ensurePubsub, fix pubSubApp cleanup ([27f2bdd](https://github.com/postalsys/emailengine/commit/27f2bdd4a9e3d7e913e7f4bed96084a278bb6312))
+* always notify webhook workers when Pub/Sub app config changes ([e9f276a](https://github.com/postalsys/emailengine/commit/e9f276ab528ad384bcbf5c370a0d0cb22e084cc5))
+* auto-recover expired Gmail Pub/Sub subscriptions and expose status via API ([7961ceb](https://github.com/postalsys/emailengine/commit/7961ceb8ce81688e5c3bb435a6c33ed3882afd7b))
+* avoid redundant Redis call and concurrent backfill races in Pub/Sub setup ([05b02af](https://github.com/postalsys/emailengine/commit/05b02afc1c14de1b8fa4e272d26da2056280731a))
+* broaden Pub/Sub notification condition in oauth-routes.js ([cbe1380](https://github.com/postalsys/emailengine/commit/cbe13800ab9460c41f5dcdcd4d7ae50f8e5e75e3))
+* clean up Pub/Sub Redis keys on deletion, refresh stale instances, and localize UI labels ([3b35fa1](https://github.com/postalsys/emailengine/commit/3b35fa19a6a8024a60d2ed21e9fcd69fda349481))
+* clear stale pubSubFlag after restart and consolidate backfill push ([f67961f](https://github.com/postalsys/emailengine/commit/f67961fbc590aa586ef40b65c2189b5dab4d89c0))
+* correct pubSubApp property name in del() and add cleanup tests ([016ae0a](https://github.com/postalsys/emailengine/commit/016ae0a98bc52eeee2bd1ec4f4d0ed58e92c507d))
+* correct typo in Pub/Sub schema version log message ([2cc8e08](https://github.com/postalsys/emailengine/commit/2cc8e085463ed550e341b027e592b5351784182e))
+* eliminate redundant Redis ops in Pub/Sub pull loop and backfill ([c8ebe39](https://github.com/postalsys/emailengine/commit/c8ebe393744eee46c3d19b5be413badd8ab315d6))
+* fix lifecycle event races, lock TTL, and stale clearExisting in MS Graph subscriptions ([3f3cbac](https://github.com/postalsys/emailengine/commit/3f3cbac843c4c221644492855d7c1beb41cd1da0))
+* fix missing renewal retry, clock-skew gap, and incomplete pipeline error check ([8a8b5b6](https://github.com/postalsys/emailengine/commit/8a8b5b68feb3edd7c984707a85ddb6d146739020))
+* fix off-by-one retry cap and simplify MS Graph subscription code ([aa9afbc](https://github.com/postalsys/emailengine/commit/aa9afbc5aea20d1bf775e59dbfd82842c4f8b701))
+* fix Pub/Sub deletion race, add 429 handling, batch ACKs, and lock ensurePubsub ([744c354](https://github.com/postalsys/emailengine/commit/744c354a062f63eedcec8de1a324a5d13519b9a7))
+* fix retry boundary, lock races, and dropped lifecycle events in MS Graph subscriptions ([d62741d](https://github.com/postalsys/emailengine/commit/d62741d2a2aafc47d831482b71ff24fa4c9d1883))
+* fix silent 401/403 error suppression, floating promise, and recovery loop in Pub/Sub ([406211c](https://github.com/postalsys/emailengine/commit/406211cbd62f7d3f1b811fbec81767f319219c63))
+* fix stale subscription state blocking recovery and retry count persisting across reconnects ([60b77d5](https://github.com/postalsys/emailengine/commit/60b77d5d7574abf728c5e1f015c0cecddd5d9fdd))
+* fix subscription loss on subscriptionRemoved, lifecycle webhook timeout, and retry gaps ([62988ab](https://github.com/postalsys/emailengine/commit/62988ab3b690ed98583fa01557a9c4145427e3ae))
+* guard fire-and-forget setMeta calls and add Pub/Sub graceful shutdown ([45f7b64](https://github.com/postalsys/emailengine/commit/45f7b64d7692b220ff14ec0e1c0e9deea84731de))
+* guard releaseLock against undefined, add 429 handling to Pub/Sub deletion ([d67ebe1](https://github.com/postalsys/emailengine/commit/d67ebe138ca9663796eacc5a1c6b5b73e721e6c4))
+* handle TimeoutError from AbortSignal.timeout in Pub/Sub pull loop ([c0e3036](https://github.com/postalsys/emailengine/commit/c0e303641e4eb9f6cdca3c584861052b2bd91148))
+* harden MS Graph subscription lifecycle, locking, cleanup, and error recovery ([8210056](https://github.com/postalsys/emailengine/commit/8210056f7e7b00977fb5487323ff1b8f9f4b7a99))
+* harden Pub/Sub deletion, IAM policy, and worker timeout cleanup ([0be7c3e](https://github.com/postalsys/emailengine/commit/0be7c3eb04f3381306284e1e3790f7c3cc28cb5a))
+* harden Pub/Sub pull loop resilience and fix projectId typo ([8124328](https://github.com/postalsys/emailengine/commit/81243287f339b5fe40cddd0e1d127514d2e11f4a))
+* harden Pub/Sub pull loop, message ACK, list pairing, and shutdown cleanup ([9e9775f](https://github.com/postalsys/emailengine/commit/9e9775f6df97af42bdb8b799c2345a4564f8a77a))
+* harden Pub/Sub pull loop, worker coordination, and OAuth app lifecycle ([529b705](https://github.com/postalsys/emailengine/commit/529b7055dd4aeb0b1d80fabff3f139cf23f00252))
+* harden Pub/Sub shutdown, loop scheduling, and abort lifecycle ([71b3ab4](https://github.com/postalsys/emailengine/commit/71b3ab4625fa3304ae7a4413a3b0a64276948d7f))
+* harden Pub/Sub shutdown, transient error handling, and input validation ([cfc6e0b](https://github.com/postalsys/emailengine/commit/cfc6e0bb73902600b6eecc6bc955af85f06d9b0f))
+* localize error page strings using translation helper ([609ebb9](https://github.com/postalsys/emailengine/commit/609ebb94d1e662ac661f7efe22f6608d7823fb85))
+* move pubsub status from unauthenticated /health to GET /v1/pubsub/status ([f6597ad](https://github.com/postalsys/emailengine/commit/f6597addff4de1c23fbd88964702bc2425f14d0c))
+* prevent oscillating recovery loop for Pub/Sub apps missing googleProjectId ([8bdbc39](https://github.com/postalsys/emailengine/commit/8bdbc39c790b7097b02459b558328c18584585a2))
+* reduce Pub/Sub recovery log noise and respect backoff delay ([63cd78f](https://github.com/postalsys/emailengine/commit/63cd78fcfd0c12934e488f6936109653371f0899))
+* remove dead circuit breaker code from IMAP and webhooks workers ([da9295b](https://github.com/postalsys/emailengine/commit/da9295b951d20a5817116195689dd3c964b3d996))
+* remove Pub/Sub circuit breaker, fix 401/403 recovery handling ([b7017f3](https://github.com/postalsys/emailengine/commit/b7017f34478dbb3bcedfb9a1e098a8a45cb0f83d))
+* reorder OAuth app deletion to prevent pull-loop gap, add startLoop tests ([129f96c](https://github.com/postalsys/emailengine/commit/129f96c99ff9ff2552fa1c1962b1e0a652b8837e))
+* replace custom Redis locks with ioredfour in Outlook subscription code ([019eaa1](https://github.com/postalsys/emailengine/commit/019eaa1f26be504d127cb6c8a05dfe50d8a47b71))
+* resolve lint errors, fix TTL null guard, and extract Pub/Sub constants ([4949431](https://github.com/postalsys/emailengine/commit/4949431c8e05f06c5aafc3dfe93876ea8a2875b9))
+* resolve livelock, timeout, and state corruption in MS Graph subscription lifecycle ([745334e](https://github.com/postalsys/emailengine/commit/745334e8c55fcf4b0b3fc6adef2b37f6cf9aea61))
+* retry transient errors during Pub/Sub resource deletion and log dropped messages ([b9d9de5](https://github.com/postalsys/emailengine/commit/b9d9de56a50b37e0163ea4e9a954d65bc305004c))
+* show OAuth apps with failed Pub/Sub setup in subscriptions list ([14124cd](https://github.com/postalsys/emailengine/commit/14124cd29baf107f1f82dff48695bc51cae4fd97))
+* stop Pub/Sub instances on OAuth2 app deletion and harden lifecycle ([bc0ff75](https://github.com/postalsys/emailengine/commit/bc0ff758cea8d8713485e3a28e81b16ee56d1dc7))
+* surface TTL reconciliation failures to operators via ttlWarning meta flag ([6e5d5c5](https://github.com/postalsys/emailengine/commit/6e5d5c5a97fb9aaff2662f3fe2f90c8226359b4a))
+* update imapflow to 1.2.15 to fix unhandled rejection crashes ([494a3f8](https://github.com/postalsys/emailengine/commit/494a3f8cd9e71bc1fc1683bea2fc92474cb33206))
+
+## [2.63.4](https://github.com/postalsys/emailengine/compare/v2.63.3...v2.63.4) (2026-03-09)
+
+
+### Bug Fixes
+
+* guard null imapClient dereferences during async operations ([671bcee](https://github.com/postalsys/emailengine/commit/671bcee4e81c7c0d6421617c3e25ec6906cb1abb))
+* prevent null dereference crash in getImapConnection during connection drops ([6a356fd](https://github.com/postalsys/emailengine/commit/6a356fd20e1412a070c26c093108c4ea2a722a5c))
+* throw instead of silent return in select() null guard, revert redundant optional chaining ([cb7db50](https://github.com/postalsys/emailengine/commit/cb7db5024e0b00f8a773328dd5e0009067bed0b6))
+* update tests for getCurrentListing null guard changes ([a644f9c](https://github.com/postalsys/emailengine/commit/a644f9c1c3f3e4cbce388e43bfa319f11f4a469c))
+
+## [2.63.3](https://github.com/postalsys/emailengine/compare/v2.63.2...v2.63.3) (2026-03-05)
+
+
+### Bug Fixes
+
+* handle undici HeadersTimeoutError as transient in Pub/Sub and OAuth2 paths ([8b3b698](https://github.com/postalsys/emailengine/commit/8b3b69880ab09119df4ca377d085db261eae2763))
+* prevent IMAP worker crash on ImapFlow unhandled rejection during IDLE recovery ([86ebb02](https://github.com/postalsys/emailengine/commit/86ebb02c321ffa758966af1957509c10e20a35fc))
+* prevent transient network errors during OAuth2 token refresh from being misclassified as auth failures ([38fa212](https://github.com/postalsys/emailengine/commit/38fa212092847b727ac1d02541103c032a983dc7))
+* retry transient network errors in Gmail and Outlook API request functions ([08ea0da](https://github.com/postalsys/emailengine/commit/08ea0daecaec73c58a91ac07df5d0f0ffc083a2f))
+* treat DNS errors as transient in Google Pub/Sub polling loop ([ec33673](https://github.com/postalsys/emailengine/commit/ec33673b47242fd7156b4641c9c4924a33eaf9e5))
+
+## [2.63.2](https://github.com/postalsys/emailengine/compare/v2.63.1...v2.63.2) (2026-03-03)
+
+
+### Bug Fixes
+
+* harden static file route with path confinement and pkg-only guard ([19cd5f6](https://github.com/postalsys/emailengine/commit/19cd5f632baa7fb37f5d639f234c5374b371ab93))
+* prevent EISDIR crash on static subdirectory requests in pkg ([4d5ef81](https://github.com/postalsys/emailengine/commit/4d5ef81679e4fd7f5e8a55a260f2c29f99938ba4))
+* prevent infinite loop and add retry backoff in account assignment ([f8b9e53](https://github.com/postalsys/emailengine/commit/f8b9e533a821d1c34a869270fa489437ac80da93))
+
+## [2.63.1](https://github.com/postalsys/emailengine/compare/v2.63.0...v2.63.1) (2026-02-26)
+
+
+### Bug Fixes
+
+* handle non-numeric error codes from Microsoft Graph in OAuth callback ([#580](https://github.com/postalsys/emailengine/issues/580)) ([89fd9f7](https://github.com/postalsys/emailengine/commit/89fd9f74db0cb32d4980b57b6c623e5d98b426a8))
+* prevent EISDIR crash on /static directory requests ([5b9c2db](https://github.com/postalsys/emailengine/commit/5b9c2db2d3e8f46c55ef0dc7343b7fb730e52414))
+* remove dead redirectToSlash option from static directory handler ([f90339a](https://github.com/postalsys/emailengine/commit/f90339a663913f47a6d1878225633a4f7cb4ac7e))
+* validate fallback status codes in resolveOAuthErrorStatus ([d2b49e3](https://github.com/postalsys/emailengine/commit/d2b49e3ad0c78c17a8aee6f1679fa3597d85ca4b))
+
+## [2.63.0](https://github.com/postalsys/emailengine/compare/v2.62.2...v2.63.0) (2026-02-19)
+
+
+### Features
+
+* flag nested message/rfc822 attachments with encodedInMessage property ([7e51024](https://github.com/postalsys/emailengine/commit/7e51024c690235e36cbbf8297939f0a41002b05e))
+
+
+### Bug Fixes
+
+* prevent permanently lost accounts after worker crashes ([3deabb5](https://github.com/postalsys/emailengine/commit/3deabb55b195601bf0c14d248257cc8a4aac76d2))
+
+## [2.62.2](https://github.com/postalsys/emailengine/compare/v2.62.1...v2.62.2) (2026-02-07)
+
+
+### Bug Fixes
+
+* include ESM [@csstools](https://github.com/csstools) packages as pkg assets ([df9f6d2](https://github.com/postalsys/emailengine/commit/df9f6d286b0fc2819edf0bf2f179dc0d6d2ce0d5))
+* pin subdependency to avoid installing unsupported version ([045b8ce](https://github.com/postalsys/emailengine/commit/045b8ce1a28c9cf9eecb26723589c5dcb4a28c21))
+
+## [2.62.1](https://github.com/postalsys/emailengine/compare/v2.62.0...v2.62.1) (2026-02-07)
+
+
+### Bug Fixes
+
+* replace BigInt literal with constructor for gettext parser compatibility ([119ba69](https://github.com/postalsys/emailengine/commit/119ba6919768ff6d22161e6c7884b8020fab37f5))
+* replace spread syntax with Object.assign in tools.js for gettext parser compatibility ([02ecc60](https://github.com/postalsys/emailengine/commit/02ecc60071c2a798eb6aae32ee6cdfe5a43933b2))
+* resolve ESLint 10 lint errors ([7d397f6](https://github.com/postalsys/emailengine/commit/7d397f6d87c87c4a8bb456a52c9db264c7c14243))
+* resolve HTTP proxy feature issues ([750619d](https://github.com/postalsys/emailengine/commit/750619d0145b60706dedec1d39ae94f9a2457ab7))
+
+## [2.62.0](https://github.com/postalsys/emailengine/compare/v2.61.5...v2.62.0) (2026-02-06)
+
+
+### Features
+
+* add AES-256-GCM encryption at rest for export files ([4f67269](https://github.com/postalsys/emailengine/commit/4f6726915bd40087c0f447a7f2cb36943e8a849a))
+* add configurable batch sizes for Gmail/Outlook exports ([a4d178c](https://github.com/postalsys/emailengine/commit/a4d178ceee195825d7f05a263897a873c361b296))
+* add export beta notice and status indicator in UI ([271bd18](https://github.com/postalsys/emailengine/commit/271bd1899241903c50f582827e0f08306c79cb1d))
+* add export reliability improvements and resume capability ([9f78644](https://github.com/postalsys/emailengine/commit/9f78644cc1801bf64725bbde47c0910aab69769b))
+* add export UI to admin account page ([cf3ce49](https://github.com/postalsys/emailengine/commit/cf3ce4979b6a4547081c2bea534a7327ebe73009))
+* add global concurrent export limit and performance optimizations ([20a1272](https://github.com/postalsys/emailengine/commit/20a1272ca20ee9961c5163a0c5d8c5452cb6b556))
+* add include attachments option to export UI ([2b8d2c6](https://github.com/postalsys/emailengine/commit/2b8d2c6cd60eb72556a1f1a4db03abf0cdc14e6f))
+* add parallel message fetching for Gmail/Outlook export ([12de963](https://github.com/postalsys/emailengine/commit/12de963abe8f6922a8840e8291e57a5dcf03e584))
+* display export expiration date in UI ([5e1e633](https://github.com/postalsys/emailengine/commit/5e1e6334e13b3b1ff012bfd76b933548c6cb6d83))
+* expose outlookSubscription in account info API ([0d97b51](https://github.com/postalsys/emailengine/commit/0d97b51bd60458ad7a8cdd9170aa50605fd1c127))
+
+
+### Bug Fixes
+
+* accept base64-encoded nonces for backward compatibility ([2c46822](https://github.com/postalsys/emailengine/commit/2c46822a46ce1b2dc632f9a20f5831eabad3b623))
+* add BullMQ stalled job configuration to prevent queue hangs ([23a74c3](https://github.com/postalsys/emailengine/commit/23a74c359e131baafd12dcf08d213eac0d96840f))
+* add labels to remaining Joi schemas for stable OpenAPI names ([4e7e064](https://github.com/postalsys/emailengine/commit/4e7e064063f9e882ec94ada9d0dd1aad6567c675))
+* add null guards to prevent unhandled exceptions ([9f48f64](https://github.com/postalsys/emailengine/commit/9f48f64b4ded00afa819d06d85be469ef4ea3ab6))
+* address 14 bugs found since v2.61.5 ([839ce55](https://github.com/postalsys/emailengine/commit/839ce55502d28a23f86868012a51bd0077b31f65))
+* address 5 release blockers for export and account APIs ([762c201](https://github.com/postalsys/emailengine/commit/762c20112e9b4de705f037659702eca18b750092))
+* address 6 critical/high bugs and make export limits opt-in ([eb14c69](https://github.com/postalsys/emailengine/commit/eb14c69db2fad7c6fe8fd140de24c41f26922f48))
+* address critical, high, and medium export feature issues ([576345a](https://github.com/postalsys/emailengine/commit/576345ad82d30193a13eea1ea130bf711cfae483))
+* address must-fix and should-fix issues for release ([6def6ef](https://github.com/postalsys/emailengine/commit/6def6efc809e204fc39bd1bf6181a477fae0481f))
+* address verified warnings from release review ([bb08f54](https://github.com/postalsys/emailengine/commit/bb08f54c2aba248e4204b704a6730c8bdf1eeb0e))
+* downgrade transient connection/timeout error logs to warn level ([9064529](https://github.com/postalsys/emailengine/commit/9064529a0d21cd6198386c73d9abca3447f6dc31))
+* downgrade transient PubSub poll errors from error to warn ([d9f2e2f](https://github.com/postalsys/emailengine/commit/d9f2e2f6300b7e99a9ae57c6466fe147614bb891))
+* enrich OAuth token error messages for BullMQ job visibility ([29da53f](https://github.com/postalsys/emailengine/commit/29da53ff38c12e59b54468f5be3579c758a651c0))
+* force Swagger UI to light mode only ([4c26d12](https://github.com/postalsys/emailengine/commit/4c26d12437feaacd26da88a6fb3e85a7ca2ee238))
+* guard against null job in export worker BullMQ failed handler ([4cb1532](https://github.com/postalsys/emailengine/commit/4cb15324b913b7a8fbcbf4f5714c26e3c06226b3))
+* handle missing attachments in ARF detection ([fe08f6a](https://github.com/postalsys/emailengine/commit/fe08f6a8c3120a01e04860c5770f78e925678797))
+* handle missing attachments in Outlook message conversion ([46cf25a](https://github.com/postalsys/emailengine/commit/46cf25adefa9ca615f05381e257ee13a6c3e49b9))
+* handle non-iterable messageInfo.attachments in mailbox sync ([3187571](https://github.com/postalsys/emailengine/commit/31875714e0ceb8e8711c910f6c561e1b1fe81a50))
+* handle notificationBaseUrl without trailing slash in prepareUrl ([1048818](https://github.com/postalsys/emailengine/commit/1048818fe1b1a193a8d5f1b99a37285b54bd9317))
+* handle uncaught EPIPE in ResponseStream for SSE endpoints ([ca7af4a](https://github.com/postalsys/emailengine/commit/ca7af4ad7a4fa6ccc02dcaee79f06d33bd38e8b8))
+* harden OAuth token request body serialization and error handling ([296c4e9](https://github.com/postalsys/emailengine/commit/296c4e99fd00928fa0682f2c735c2d81c1a74bcf))
+* improve BullMQ efficiency with jitter, retention, and cleanup ([fb48fd8](https://github.com/postalsys/emailengine/commit/fb48fd84065fe44a4bf5054ced45f4bffc9c8153))
+* improve packUid robustness with fallback and validation ([4b4253e](https://github.com/postalsys/emailengine/commit/4b4253e3fd025070b42c3d012071dd6376191692))
+* improve submit resilience during worker restarts and add batch endpoint ([f559c38](https://github.com/postalsys/emailengine/commit/f559c3818bb727b137f5a2b8b32b0efee48a093d))
+* leverage Nodemailer error codes for better retry logic and UI messages ([0f3068a](https://github.com/postalsys/emailengine/commit/0f3068abc4b63d87a9f93ba927f8be07a5737f0c))
+* preserve threadId for large Gmail threaded replies via multipart upload ([b04c2ca](https://github.com/postalsys/emailengine/commit/b04c2cac6bc7a6dfe347a800b57ed0bd1a21291a))
+* prevent ArrayBuffer detachment and IMAP null reference errors ([3b97372](https://github.com/postalsys/emailengine/commit/3b9737234b6f71ae9c1adbf4018134cc6bb4a070))
+* prevent concurrent export race condition with atomic Redis operation ([dbc14f6](https://github.com/postalsys/emailengine/commit/dbc14f683ef8509003699a12ff60ec26001522fa))
+* prevent sync state corruption from invalid uidNext values ([533f026](https://github.com/postalsys/emailengine/commit/533f026933fbbefb8b6998e412dc8cf3693c2b9b))
+* prevent sync state corruption from invalid uidValidity values ([976fdb7](https://github.com/postalsys/emailengine/commit/976fdb7a1a74127c6c738b331f2c5aa8b7daddb4))
+* prevent UTF-8 data corruption in OAuth request Buffer handling ([14361fd](https://github.com/postalsys/emailengine/commit/14361fdc4c7c04ad2ca5934eb4d418abf1c66289))
+* reject invalid nonce format instead of silently regenerating ([422ea5c](https://github.com/postalsys/emailengine/commit/422ea5c3dc56f4cf1679a1783d4c108d1486f455))
+* remove BullMQ job when marking interrupted exports as failed ([ad587a7](https://github.com/postalsys/emailengine/commit/ad587a7e0e536f2cb1647f420daa338e24d24233))
+* replace blocking scryptSync with async scrypt in DecryptStream ([c9c6ede](https://github.com/postalsys/emailengine/commit/c9c6edefb11bf7908e5fd64118ff4211f5f6bd4e))
+* resolve 11 bugs in export functionality ([f5d2621](https://github.com/postalsys/emailengine/commit/f5d2621bbaa2cf3b1dab06c67a7e2d5bf29075ed))
+* resolve Gmail label IDs to human-readable names ([02c306f](https://github.com/postalsys/emailengine/commit/02c306f10f29d8941f242f9283684621fefcd5c3))
+* resolve OpenAPI spec validation errors for token restrictions ([a9cffe1](https://github.com/postalsys/emailengine/commit/a9cffe150843fb7f8b4f7f5d01afc69ef451bac2))
+* restore retry for empty Buffer payloads and fix large threaded Gmail replies ([107c164](https://github.com/postalsys/emailengine/commit/107c16475a2278a9428903d7280f481cf62a64ec))
+* return WorkerNotAvailable immediately and remove batch submit endpoint ([aed5c45](https://github.com/postalsys/emailengine/commit/aed5c45aeec37a42b6c7113a3e45cb7153ae67bb))
+* revert jQuery to 3.7.1 and harden export resilience ([43f2a74](https://github.com/postalsys/emailengine/commit/43f2a74587fc8915dbb6dce6497f60a8159f6140))
+* send Buffer for Outlook sendMail base64 payload to avoid JSON quoting ([e89a924](https://github.com/postalsys/emailengine/commit/e89a924343bf8ba3ea1fd7e75bc09aa53c2177b2))
+* share Lock instance across Account objects to prevent Redis connection leak ([56f421b](https://github.com/postalsys/emailengine/commit/56f421b866a12187937cfa935764878f14f0ab1b))
+* stabilize Swagger model names for SDK generation ([8078830](https://github.com/postalsys/emailengine/commit/80788305f23eee9d021b4c72dce21961493ca093))
+* tighten export route validation and apply default export limits ([f45d83f](https://github.com/postalsys/emailengine/commit/f45d83f1d27ab05984f1a0213174025f5f79d71e))
+* update test expectations for email-text-tools 2.3.5+ behavior ([1e28abf](https://github.com/postalsys/emailengine/commit/1e28abf77282ac4c550f9834f61064ae8fde7de9))
+* update test expectations for email-text-tools 2.4.x ([6333fa3](https://github.com/postalsys/emailengine/commit/6333fa3308b1b822a5c364ad5cb25c1c211edeca))
+* use consistent index source in batch submit success and failure paths ([3a73704](https://github.com/postalsys/emailengine/commit/3a737047c1f1e4fda6bd7c4b6822ca31ebe27fd2))
+* validate nonce format before using data.n from cached URLs ([d825303](https://github.com/postalsys/emailengine/commit/d82530395e93e88f5841156a53fe41d476eec9da))
+
+
+### Performance Improvements
+
+* use MS Graph batch API for Outlook message export ([f031f77](https://github.com/postalsys/emailengine/commit/f031f770278a14aeb2fd5a589e31bb5621b0c410))
+
+
+### Reverts
+
+* remove Swagger UI light mode forcing ([9c9bd25](https://github.com/postalsys/emailengine/commit/9c9bd25e4488828e3112e671df12d1c551957dac))
+
+## [2.61.5](https://github.com/postalsys/emailengine/compare/v2.61.4...v2.61.5) (2026-01-15)
+
+
+### Bug Fixes
+
+* use base64url encoding for OAuth state nonce in /v1/authentication/form ([1f2cecf](https://github.com/postalsys/emailengine/commit/1f2cecf9efbee8a12c3a0d27c9879bfbbf7dfa39))
+* use base64url encoding for OAuth state nonce in /v1/authentication/form ([dead38c](https://github.com/postalsys/emailengine/commit/dead38c348f1c0204f2bfba09997090cb86c348b))
+* use base64url encoding for OAuth state nonce in remaining locations ([961b710](https://github.com/postalsys/emailengine/commit/961b710357d836782c9bbce329178aa96e08ee20))
+
+## [2.61.4](https://github.com/postalsys/emailengine/compare/v2.61.3...v2.61.4) (2026-01-14)
+
+
+### Bug Fixes
+
+* handle delegation errors in loadAccountData, isApiClient, and UI listing ([c306618](https://github.com/postalsys/emailengine/commit/c306618a37428bbf088ed1289bf832e778f14b9c))
+* show Failed status for accounts with IMAP disabled due to auth errors ([e6b687d](https://github.com/postalsys/emailengine/commit/e6b687d458cfd080795f7176f862109e2c299fff))
+
+## [2.61.3](https://github.com/postalsys/emailengine/compare/v2.61.2...v2.61.3) (2026-01-14)
+
+
+### Bug Fixes
+
+* prevent 500 error when listing accounts with invalid delegation config ([8651bcc](https://github.com/postalsys/emailengine/commit/8651bcc3c18cd54ee5309b3392915773c355e6c4))
+* update gettext script to include refactored UI route files ([5b2e4a5](https://github.com/postalsys/emailengine/commit/5b2e4a55771f192fb14d030b5e5d08ba860c90ab))
+
+## [2.61.2](https://github.com/postalsys/emailengine/compare/v2.61.1...v2.61.2) (2026-01-12)
+
+
+### Bug Fixes
+
+* add error logging for MS Graph subscription creation failures ([ba928e4](https://github.com/postalsys/emailengine/commit/ba928e495acb7fcc8c18e6cf34c917a2f4ad3337))
+* add forced exit to prevent test timeout in CI ([aeb7261](https://github.com/postalsys/emailengine/commit/aeb726169b26e7263acb55041112f5a97a818b8a))
+* handle empty or invalid JSON responses from OAuth APIs ([57d8886](https://github.com/postalsys/emailengine/commit/57d8886a0d29b20df4b575bac8210f6ed97f7fa3))
+
+## [2.61.1](https://github.com/postalsys/emailengine/compare/v2.61.0...v2.61.1) (2025-12-28)
+
+
+### Bug Fixes
+
+* Memory leak fixes for IMAP client and webhooks worker ([b749f96](https://github.com/postalsys/emailengine/commit/b749f964f7e8de6828d23b8c3c5a3ca11e15898a))
+
+## [2.61.0](https://github.com/postalsys/emailengine/compare/v2.60.1...v2.61.0) (2025-12-22)
+
+
+### Features
+
+* Add check-bounce CLI command for analyzing bounce emails ([ae3a85d](https://github.com/postalsys/emailengine/commit/ae3a85dd5acdf9c893196284487e536ac3d6d9ec))
+* Add Exim-style bounce detection for diagnostic messages ([b82e588](https://github.com/postalsys/emailengine/commit/b82e588d3e699f3c757c6a01f3fb9933c94bbb4c))
+* Improve ARF complaint detection and add comprehensive tests ([5533552](https://github.com/postalsys/emailengine/commit/55335526a19c6948675d126d1dbb14db353253a0))
+* Improve autoreply detection and add comprehensive tests ([1cf179f](https://github.com/postalsys/emailengine/commit/1cf179f8289eb05e8add420fe02d6410f61718cc))
+* Improve bounce detection coverage for non-standard formats ([5393872](https://github.com/postalsys/emailengine/commit/53938724c699b32177ece83c3d88be9a5432c067))
+* Improve bounce detection for legacy formats ([90a0289](https://github.com/postalsys/emailengine/commit/90a0289f7999e23149e14ff6ea5d703de056d5b0))
+* Replace static help.txt with dynamic CLI help system ([4cd5fb0](https://github.com/postalsys/emailengine/commit/4cd5fb059c2bf7436c4262a7daee1e85f535c322))
+
+
+### Bug Fixes
+
+* Detect "Out of the Office" autoreply subject pattern ([7191c50](https://github.com/postalsys/emailengine/commit/7191c50ae62930a66bf6598cb55f94130e022cf9))
+* Harden bounce detection against edge cases and ReDoS attacks ([d6c72c2](https://github.com/postalsys/emailengine/commit/d6c72c29d4c2bc1a20025204cc0cf20f803b04a6))
+
+## [2.60.1](https://github.com/postalsys/emailengine/compare/v2.60.0...v2.60.1) (2025-12-17)
+
+
+### Bug Fixes
+
+* Enable NPM package publishing ([051f4d6](https://github.com/postalsys/emailengine/commit/051f4d638ccea94f22d08924e300fa8672b51d9d))
+* Exclude browser-only deps from pkg bundle ([994dd41](https://github.com/postalsys/emailengine/commit/994dd4169c5324d411feed804f277de119854916))
+* Wrap async close handler await calls in try-catch to prevent unhandled rejections ([c6df321](https://github.com/postalsys/emailengine/commit/c6df321c7a580c1cd10d2e1eac5681aa49e4c87a))
+
+## [2.60.0](https://github.com/postalsys/emailengine/compare/v2.59.2...v2.60.0) (2025-12-15)
+
+
+### Features
+
+* Add bounce message classification using ML model ([e337ceb](https://github.com/postalsys/emailengine/commit/e337cebfb813192c385687c510c9e189d3eb0854))
+
+
+### Bug Fixes
+
+* Reduce production node_modules size by removing unused static-only deps ([af9d584](https://github.com/postalsys/emailengine/commit/af9d584d4ad806e8a0b9eb7e59e6d5c8c8ff8878))
+
+## [2.59.2](https://github.com/postalsys/emailengine/compare/v2.59.1...v2.59.2) (2025-12-11)
+
+
+### Bug Fixes
+
+* Bumped dependencies to get rid of security warnings ([54b13c4](https://github.com/postalsys/emailengine/commit/54b13c4c4a42c7af886c63a97b6cdbb4dc8696b1))
+
+## [2.59.1](https://github.com/postalsys/emailengine/compare/v2.59.0...v2.59.1) (2025-12-10)
+
+
+### Bug Fixes
+
+* Correct API schema documentation and descriptions ([8a51465](https://github.com/postalsys/emailengine/commit/8a514650c8422b666244164aa71fe1d7b6f0ec2b))
+* Improve auth-server example with proper error handling and documentation ([cef5b47](https://github.com/postalsys/emailengine/commit/cef5b47378bdb18a1ff136fd29e8c63dd566cb86))
+* Increase openAiPrompt max size from 6KB to 1MB ([29d673d](https://github.com/postalsys/emailengine/commit/29d673d6bf35f78c3ef53ec1b690c49deecd889c))
+
+## [2.59.0](https://github.com/postalsys/emailengine/compare/v2.58.2...v2.59.0) (2025-12-08)
+
+
+### Features
+
+* Add dedicated page to view accounts assigned to IMAP worker threads ([6d7e69e](https://github.com/postalsys/emailengine/commit/6d7e69e35230a3a11076d65174ef1ed7e0ecc144))
+* Add MS Graph webhook subscription state metrics ([3e3ad18](https://github.com/postalsys/emailengine/commit/3e3ad184d013770d6defbe71f21072969fe105be))
+* Add OAuth2 API metrics for MS Graph and Gmail backends ([9a8182c](https://github.com/postalsys/emailengine/commit/9a8182cf82c1493e472573b97dded8660feaff7f))
+* Add OAuth2 token refresh metrics to all refresh paths ([4c23c90](https://github.com/postalsys/emailengine/commit/4c23c903edf916367ffc3bcd1b1abe97cf783bc6))
+* Add Prometheus metrics and Grafana dashboard ([e3d4088](https://github.com/postalsys/emailengine/commit/e3d4088751ab0d04ea86425bbcea02ca49afbc90))
+
+
+### Bug Fixes
+
+* Correct CPU usage chart unit from seconds to dimensionless ([88765bc](https://github.com/postalsys/emailengine/commit/88765bc137a6dedafdaee8c6677b5e4e8ef2eec6))
+* Correct y-positions of Redis panels in Grafana dashboard ([12fdeff](https://github.com/postalsys/emailengine/commit/12fdeff1c4f837e7c37ebdb6c5647b01fb49c467))
+* Fix OAuth2 token refresh metrics not being recorded ([a6bf696](https://github.com/postalsys/emailengine/commit/a6bf6964e5b412bde5b44630eb20a3af59d2e700))
+* Rename IMAP worker to Email worker in thread display ([95b39da](https://github.com/postalsys/emailengine/commit/95b39da07c7ee28ac0539f6599546bc49af8e0ac))
+
+## [2.58.2](https://github.com/postalsys/emailengine/compare/v2.58.1...v2.58.2) (2025-11-24)
+
+
+### Bug Fixes
+
+* Add EENGINE_DISABLE_SETUP_WARNINGS environment variable ([933a4f7](https://github.com/postalsys/emailengine/commit/933a4f7c8935f1aeadab5b65c6454460e6e191d5))
+* Add environment variable support and deprecate unused OAuth2 fields ([a63fa8b](https://github.com/postalsys/emailengine/commit/a63fa8b93073b325422d7ed4ea034e4d53ad2b2b))
+* **AI:** Add GPT-5 support with updated token limits ([f99947a](https://github.com/postalsys/emailengine/commit/f99947a34ff25ad0224c1b8e828d7cf104fd26a5))
+* Improve OAuth token refresh error handling and state management ([5be242b](https://github.com/postalsys/emailengine/commit/5be242bd5392ff08f83d7709ad4f82f8f218e05d))
+* **LLM integration:** Add configurable max tokens setting for OpenAI API ([a746388](https://github.com/postalsys/emailengine/commit/a746388c0b69746f21f6ac95e49d7797bb8f9722))
+
+## [2.58.1](https://github.com/postalsys/emailengine/compare/v2.58.0...v2.58.1) (2025-11-14)
+
+
+### Bug Fixes
+
+* Add EENGINE_ENABLE_OAUTH_TOKENS_API environment variable support ([be74bf9](https://github.com/postalsys/emailengine/commit/be74bf9b92ea20b9f0cbb7cf336036e4c2e5cf7b))
+* **outlook:** Request specific body content type from MS Graph API ([9428852](https://github.com/postalsys/emailengine/commit/9428852c6f79721c9422698de25edc8ba9cfec8d))
+* **smtp-interface:** Add configurable SMTP message size limit ([c3692b9](https://github.com/postalsys/emailengine/commit/c3692b929fded1f48f1054da1777a19378908b0f))
+
 ## [2.58.0](https://github.com/postalsys/emailengine/compare/v2.57.3...v2.58.0) (2025-10-27)
 
 
