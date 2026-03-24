@@ -75,7 +75,7 @@ jobs:
     needs: build
     environment:
       name: production
-      url: https://ee-k8s.clientify.net
+      url: https://ee.clientify.com
 
     steps:
       - name: Approved
@@ -161,7 +161,7 @@ jobs:
           echo "Verificando salud del servicio..."
           for i in $(seq 1 6); do
             STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
-              https://ee-k8s.clientify.net/health || echo "000")
+              https://ee.clientify.com/health || echo "000")
             if [ "${STATUS}" = "200" ]; then
               echo "Health check OK (intento ${i}/6) - HTTP ${STATUS}"
               exit 0
@@ -197,7 +197,7 @@ jobs:
           echo "Branch:     ${{ github.ref_name }}"
           echo "Commit:     ${{ github.sha }}"
           echo "Image tag:  ${TAG}"
-          echo "URL:        https://ee-k8s.clientify.net"
+          echo "URL:        https://ee.clientify.com"
           echo ""
           echo "Pods actuales:"
           kubectl get pods -n ${{ env.NAMESPACE }} --no-headers 2>/dev/null || true
