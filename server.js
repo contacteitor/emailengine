@@ -2918,7 +2918,6 @@ const gracefulShutdown = async signal => {
     }
     const workerCount = activeWorkersList.length;
     const workerTypes = [...new Set(activeWorkersList.map(w => w.type))].join(', ');
-
     const SEP = '================================================================';
     console.log(`\n${SEP}`);
     console.log(` GRACEFUL SHUTDOWN INICIADO`);
