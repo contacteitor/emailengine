@@ -1095,7 +1095,7 @@ let spawnWorker = async type => {
                             reassignmentPending = false;
                             assignAccounts().catch(err => logger.error({ msg: 'Unable to reassign accounts (failsafe)', err }));
                         }
-                    }, 10000); // 10 second timeout
+                    }, 2000); // 2s — reduced from 10s to minimize Disconnected window on scale-down
 
                     logger.info({
                         msg: 'Worker crashed, waiting for restart before reassignment',
@@ -2978,15 +2978,19 @@ const gracefulShutdown = async signal => {
     logger.flush(() => process.exit(0));
 };
 
-process.on('SIGTERM', () => gracefulShutdown('SIGTERM').catch(err => {
-    logger.error({ msg: 'Error durante graceful shutdown', err });
-    process.exit(1);
-}));
+process.on('SIGTERM', () =>
+    gracefulShutdown('SIGTERM').catch(err => {
+        logger.error({ msg: 'Error durante graceful shutdown', err });
+        process.exit(1);
+    })
+);
 
-process.on('SIGINT', () => gracefulShutdown('SIGINT').catch(err => {
-    logger.error({ msg: 'Error durante graceful shutdown', err });
-    process.exit(1);
-}));
+process.on('SIGINT', () =>
+    gracefulShutdown('SIGINT').catch(err => {
+        logger.error({ msg: 'Error durante graceful shutdown', err });
+        process.exit(1);
+    })
+);
 
 // START APPLICATION
 
