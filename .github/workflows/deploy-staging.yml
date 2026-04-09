@@ -15,7 +15,7 @@ on:
 env:
   REGISTRY: registry.digitalocean.com/clientify
   IMAGE: registry.digitalocean.com/clientify/emailengine-staging
-  MANIFESTS_REPO: contacteitor/clientify-manifiestos-kubernetes
+  MANIFESTS_REPO: ClientifySL/clientify-manifiestos-kubernetes
   K8S_CLUSTER: clientify-staging-k8s
   NAMESPACE: emailengine-staging
 
