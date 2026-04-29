@@ -787,7 +787,7 @@ class ConnectionHandler {
         };
     }
 
-    async kill() {
+    async kill({ graceful = false } = {}) {
         if (this.killed) {
             return;
         }
@@ -796,7 +796,9 @@ class ConnectionHandler {
 
         this.accounts.forEach(accountObject => {
             if (accountObject && accountObject.connection) {
-                accountObject.connection.close();
+                // During graceful shutdown, skip writing 'disconnected' to Redis so
+                // surviving pods do not see a transient Disconnected state in the UI.
+                accountObject.connection.close({ skipStateUpdate: graceful });
             }
         });
 
@@ -982,7 +984,7 @@ parentPort.on('message', message => {
     if (message && message.cmd === 'gracefulShutdown') {
         console.log('[SHUTDOWN] Worker imap: iniciando kill de conexiones IMAP');
         connectionHandler
-            .kill()
+            .kill({ graceful: true })
             .then(() => {
                 console.log('[SHUTDOWN] Worker imap: conexiones IMAP cerradas');
                 process.exit(0);

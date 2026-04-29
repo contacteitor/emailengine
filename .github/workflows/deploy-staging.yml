@@ -13,15 +13,18 @@ on:
         default: false
 
 env:
-  REGISTRY: registry.digitalocean.com/clientify
-  IMAGE: registry.digitalocean.com/clientify/emailengine-staging
-  MANIFESTS_REPO: contacteitor/clientify-manifiestos-kubernetes
-  K8S_CLUSTER: clientify-staging-k8s
+  AWS_REGION: eu-central-1
+  AWS_ACCOUNT_ID: "105028894218"
+  REGISTRY: 105028894218.dkr.ecr.eu-central-1.amazonaws.com/clientify
+  IMAGE_NAME: emailengine-staging
+  IMAGE: 105028894218.dkr.ecr.eu-central-1.amazonaws.com/clientify/emailengine-staging
+  MANIFESTS_REPO: ClientifySL/clientify-manifiestos-kubernetes
+  K8S_CLUSTER: clientify-api-staging
   NAMESPACE: emailengine-staging
 
 jobs:
   # ---------------------------------------------------------------------------
-  # Job 1: Build & Push imagen a DO Registry
+  # Job 1: Build & Push imagen a ECR
   # ---------------------------------------------------------------------------
   build:
     name: Build & Push Image
@@ -41,13 +44,29 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Install doctl
-        uses: digitalocean/action-doctl@v2
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
         with:
-          token: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
+          aws-access-key-id: ${{ secrets.AWS_STAGING_ECR_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_STAGING_ECR_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
 
-      - name: Log in to DigitalOcean Registry
-        run: doctl registry login --expiry-seconds 3600
+      - name: Log in to Amazon ECR
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Ensure ECR repository exists
+        run: |
+          REPO="clientify/${{ env.IMAGE_NAME }}"
+          if ! aws ecr describe-repositories --repository-names "$REPO" --region "$AWS_REGION" > /dev/null 2>&1; then
+            echo "Creando repositorio ECR: $REPO"
+            aws ecr create-repository \
+              --repository-name "$REPO" \
+              --region "$AWS_REGION" \
+              --image-scanning-configuration scanOnPush=true \
+              --image-tag-mutability MUTABLE > /dev/null
+          else
+            echo "Repositorio ECR ya existe: $REPO"
+          fi
 
       - name: Generate version tag
         id: version
@@ -70,7 +89,7 @@ jobs:
             COMMIT_SHA=${{ github.sha }}
             BUILD_TIME=${{ github.event.repository.updated_at }}
           cache-from: type=registry,ref=${{ env.IMAGE }}:staging-latest
-          cache-to: type=inline
+          cache-to: type=registry,ref=${{ env.IMAGE }}:staging-latest,mode=max
 
   # ---------------------------------------------------------------------------
   # Job 2: Deploy al cluster (después del build)
@@ -81,11 +100,6 @@ jobs:
     needs: build
 
     steps:
-      - name: Install doctl
-        uses: digitalocean/action-doctl@v2
-        with:
-          token: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
-
       - name: Get version
         id: version
         run: |
@@ -104,8 +118,8 @@ jobs:
         run: |
           TAG=${{ steps.version.outputs.VERSION }}
           sed -i "s|image: ${{ env.IMAGE }}:[a-zA-Z0-9._-]*|image: ${{ env.IMAGE }}:${TAG}|g" \
-            manifests/emailengine/staging/deployment.yaml
-          echo "Updated deployment.yaml → tag: ${TAG}"
+            manifests/emailengine/staging/app/deployment.yaml
+          echo "Updated app/deployment.yaml → tag: ${TAG}"
 
       - name: Commit and push manifest changes
         run: |
@@ -113,7 +127,7 @@ jobs:
           cd manifests
           git config user.name "GitHub Actions"
           git config user.email "actions@github.com"
-          git add emailengine/staging/deployment.yaml
+          git add emailengine/staging/app/deployment.yaml
 
           if git diff --staged --quiet; then
             echo "No hay cambios para commitear"
@@ -123,48 +137,9 @@ jobs:
             echo "Manifests actualizados en repo GitOps"
           fi
 
-      - name: Configure kubectl
-        run: doctl kubernetes cluster kubeconfig save ${{ env.K8S_CLUSTER }}
-        timeout-minutes: 3
-
-      - name: Apply manifests
-        timeout-minutes: 5
-        run: |
-          kubectl apply -f manifests/emailengine/staging/deployment.yaml
-
-      - name: Wait for rollout
-        id: rollout
-        timeout-minutes: 10
-        run: |
-          kubectl rollout status deployment/emailengine \
-            -n ${{ env.NAMESPACE }} \
-            --timeout=540s
-
-      - name: Health check post-deploy
-        timeout-minutes: 5
-        run: |
-          echo "Verificando salud del servicio..."
-          for i in $(seq 1 6); do
-            STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
-              https://ee-staging.clientify.com/health || echo "000")
-            if [ "${STATUS}" = "200" ]; then
-              echo "Health check OK (intento ${i}/6) - HTTP ${STATUS}"
-              exit 0
-            fi
-            echo "Intento ${i}/6 falló (HTTP ${STATUS}), esperando 30s..."
-            sleep 30
-          done
-          echo "Health check falló después de 3 minutos"
-          exit 1
-
-      - name: Auto-rollback on failure
-        if: failure() && steps.rollout.conclusion == 'failure'
-        run: |
-          echo "Iniciando rollback automático..."
-          kubectl rollout undo deployment/emailengine -n ${{ env.NAMESPACE }}
-          kubectl rollout status deployment/emailengine \
-            -n ${{ env.NAMESPACE }} --timeout=300s || true
-          echo "Rollback completado"
+      # ArgoCD detecta el cambio en el repo y aplica automáticamente (~60s)
+      # No se hace kubectl apply directo ni rollback manual —
+      # ArgoCD es la única fuente de verdad para el estado del cluster
 
       - name: Deployment Summary
         if: always()
@@ -178,12 +153,11 @@ jobs:
             echo "DEPLOYMENT FALLIDO (ver logs arriba)"
           fi
           echo "=========================================="
-          echo "Namespace:  ${{ env.NAMESPACE }}"
-          echo "Branch:     ${{ github.ref_name }}"
-          echo "Commit:     ${{ github.sha }}"
-          echo "Image tag:  ${TAG}"
-          echo "URL:        https://ee-staging.clientify.com"
-          echo ""
-          echo "Pods actuales:"
-          kubectl get pods -n ${{ env.NAMESPACE }} --no-headers 2>/dev/null || true
+          echo "Cluster:     ${{ env.K8S_CLUSTER }} (EKS · ${{ env.AWS_REGION }})"
+          echo "Namespace:   ${{ env.NAMESPACE }}"
+          echo "Branch:      ${{ github.ref_name }}"
+          echo "Commit:      ${{ github.sha }}"
+          echo "Image:       ${{ env.IMAGE }}:${TAG}"
+          echo "URL:         https://ee-staging.clientify.com"
+          echo "ArgoCD sync: https://argocd.clientify.com/applications/emailengine-staging"
           echo "=========================================="
